@@ -1,0 +1,21 @@
+[package]
+name = "nvm-log"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = [ "std" ]
+std = []
+
+[dependencies]
+embedded-storage = "0.2.0"
+postcard = "0.7.2"
+
+# By default, `serde` has the `std` feature enabled, which makes it unsuitable for embedded targets
+# disabling default-features fixes this
+serde = { version = "1.0.*", default-features = false }
+
+[dev-depencencies]
+serde_derive = { version = "1.0.*", default-features = false }
