@@ -39,7 +39,7 @@ impl MockFlash {
 
     fn validate_read_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
-        if (offset % 4) != 0 {
+        if (offset % Self::BYTES_PER_WORD) != 0 {
             Err(MockFlashError::Misaligned)
         } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES
         {
@@ -56,8 +56,8 @@ impl MockFlash {
     ) -> Result<Range<usize>, MockFlashError> {
         let range = Self::validate_read_operation(offset, length)?;
 
-        let start_word = range.start / 4;
-        let end_word = (range.end + 4 - 1) / 4;
+        let start_word = range.start / Self::BYTES_PER_WORD;
+        let end_word = (range.end + Self::BYTES_PER_WORD - 1) / Self::BYTES_PER_WORD;
 
         let slice = &self.writable[start_word..end_word];
         let it = (range.start..range.end).zip(slice.iter());
@@ -81,7 +81,7 @@ enum MockFlashError {
 impl ReadNorFlash for MockFlash {
     type Error = MockFlashError;
 
-    const READ_SIZE: usize = 4;
+    const READ_SIZE: usize = Self::BYTES_PER_WORD;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         let range = Self::validate_read_operation(offset, bytes.len())?;
@@ -97,7 +97,7 @@ impl ReadNorFlash for MockFlash {
 }
 
 impl NorFlash for MockFlash {
-    const WRITE_SIZE: usize = 4;
+    const WRITE_SIZE: usize = Self::BYTES_PER_WORD;
 
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
@@ -119,7 +119,8 @@ impl NorFlash for MockFlash {
             *byte = u8::MAX;
         }
 
-        for word_writable in self.writable[from / 4..to / 4].iter_mut() {
+        let range = from / Self::BYTES_PER_WORD..to / Self::BYTES_PER_WORD;
+        for word_writable in self.writable[range].iter_mut() {
             *word_writable = true;
         }
 
@@ -129,8 +130,8 @@ impl NorFlash for MockFlash {
     fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         let range = self.validate_write_operation(offset, bytes.len())?;
 
-        let start_word = range.start / 4;
-        let end_word = (range.end + 4 - 1) / 4;
+        let start_word = range.start / Self::BYTES_PER_WORD;
+        let end_word = (range.end + Self::BYTES_PER_WORD - 1) / Self::BYTES_PER_WORD;
 
         self.as_bytes_mut()[range].copy_from_slice(bytes);
 
