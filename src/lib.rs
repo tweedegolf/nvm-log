@@ -15,6 +15,20 @@ pub struct NvmLogPosition {
     next_log_addr: u32,
 }
 
+#[derive(Debug)]
+pub enum NvmLogError<F> {
+    Flash(F),
+    Postcard(postcard::Error),
+}
+
+type NvmLogResult<T, F> = Result<T, NvmLogError<F>>;
+
+impl<T> From<T> for NvmLogError<T> {
+    fn from(v: T) -> Self {
+        NvmLogError::Flash(v)
+    }
+}
+
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F) -> Self {
         Self {
@@ -71,9 +85,9 @@ where
 }
 
 impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T> {
-    pub fn store(&mut self, value: T) -> Result<(), F::Error> {
+    pub fn store(&mut self, value: T) -> NvmLogResult<(), F::Error> {
         let mut buf = [0u8; WORKING_BUF_SIZE];
-        let bytes = postcard::to_slice_cobs(&value, &mut buf).unwrap();
+        let bytes = postcard::to_slice_cobs(&value, &mut buf).map_err(NvmLogError::Postcard)?;
 
         use CrossPageBoundary::*;
         match crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) {
@@ -110,7 +124,7 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
     /// The next_log_addr is moved forward by `added`. It may now be bigger
     /// than the `oldest_log_addr`, so it too needs to move forward to the
     /// start of the next log
-    fn move_cursor_add(&mut self, added: u32) -> Result<(), F::Error> {
+    fn move_cursor_add(&mut self, added: u32) -> NvmLogResult<(), F::Error> {
         let new = self.next_log_addr + added;
         if self.next_log_addr <= self.oldest_log_addr && new > self.oldest_log_addr {
             self.move_cursor_absolute(new)
@@ -120,7 +134,7 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
         }
     }
 
-    fn move_cursor_absolute(&mut self, new: u32) -> Result<(), F::Error> {
+    fn move_cursor_absolute(&mut self, new: u32) -> NvmLogResult<(), F::Error> {
         let mut next_oldest_log = 0;
 
         if new > self.oldest_log_addr {
@@ -144,15 +158,16 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
     }
 }
 
-pub struct NvmLogIter<'a, F, T> {
-    nvm_log: &'a mut NvmLog<F, T>,
-    span: Span,
-}
-
 impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::DeserializeOwned>
     NvmLog<F, T>
 {
     pub fn iter(&'a mut self) -> NvmLogIter<'a, F, T> {
+        NvmLogIter {
+            result_iter: self.result_iter(),
+        }
+    }
+
+    pub fn result_iter(&'a mut self) -> NvmLogResultIter<'a, F, T> {
         let span = if self.oldest_log_addr < self.next_log_addr {
             Span::Contiguous {
                 from: self.oldest_log_addr,
@@ -165,7 +180,7 @@ impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::Deserialize
             }
         };
 
-        NvmLogIter {
+        NvmLogResultIter {
             span,
             nvm_log: self,
         }
@@ -217,10 +232,33 @@ impl Span {
     }
 }
 
-impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::DeserializeOwned> Iterator
-    for NvmLogIter<'a, F, T>
+pub struct NvmLogIter<'a, F, T> {
+    result_iter: NvmLogResultIter<'a, F, T>,
+}
+
+impl<'a, F, T> Iterator for NvmLogIter<'a, F, T>
+where
+    F: embedded_storage::nor_flash::ReadNorFlash,
+    T: serde::de::DeserializeOwned,
 {
     type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.result_iter.next()?.ok()
+    }
+}
+
+pub struct NvmLogResultIter<'a, F, T> {
+    nvm_log: &'a mut NvmLog<F, T>,
+    span: Span,
+}
+
+impl<'a, F, T> Iterator for NvmLogResultIter<'a, F, T>
+where
+    F: embedded_storage::nor_flash::ReadNorFlash,
+    T: serde::de::DeserializeOwned,
+{
+    type Item = NvmLogResult<T, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.span.is_empty() {
@@ -234,9 +272,7 @@ impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::Deserialize
         let buf = &mut buf[..remaining_bytes];
 
         match self.nvm_log.flash.read(self.span.start(), buf) {
-            Err(_e) => {
-                None
-            }
+            Err(e) => Some(Err(NvmLogError::Flash(e))),
             Ok(()) => {
                 match buf.iter().position(|x| *x == 0) {
                     None => {
@@ -251,8 +287,8 @@ impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::Deserialize
                         // +1 to skip the NULL byte
                         self.span.step(message_end as u32 + 1, capacity);
                         match postcard::from_bytes_cobs(buf) {
-                            Ok(e) => Some(e),
-                            Err(_e) => None,
+                            Ok(e) => Some(Ok(e)),
+                            Err(e) => Some(Err(NvmLogError::Postcard(e))),
                         }
                     }
                 }

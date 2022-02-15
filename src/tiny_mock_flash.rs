@@ -9,6 +9,12 @@ struct MockFlash {
     words: Vec<u8>,
 }
 
+impl Default for MockFlash {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockFlash {
     const PAGES: usize = 3;
     const BYTES_PER_WORD: usize = 1;
@@ -40,6 +46,8 @@ impl MockFlash {
 
     fn validate_read_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
+
+        #[allow(clippy::modulo_one)]
         if (offset % Self::BYTES_PER_WORD) != 0 {
             Err(MockFlashError::Misaligned)
         } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES

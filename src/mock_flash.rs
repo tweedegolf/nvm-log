@@ -3,9 +3,15 @@
 use core::ops::Range;
 use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
 
-struct MockFlash {
+pub struct MockFlash {
     writable: Vec<bool>,
     words: Vec<u32>,
+}
+
+impl Default for MockFlash {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockFlash {
@@ -72,7 +78,7 @@ impl MockFlash {
 }
 
 #[derive(Debug)]
-enum MockFlashError {
+pub enum MockFlashError {
     OutOfBounds,
     Misaligned,
     NotWritable(u32),
