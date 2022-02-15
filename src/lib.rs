@@ -1,7 +1,5 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
-use embedded_storage::ReadStorage;
-
 pub mod mock_flash;
 pub mod tiny_mock_flash;
 
@@ -14,7 +12,6 @@ pub struct NvmLog<F, T> {
 }
 
 pub struct NvmLogPosition {
-    oldest_log_addr: u32,
     next_log_addr: u32,
 }
 
@@ -30,7 +27,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
 
     pub fn current_postition(&self) -> NvmLogPosition {
         NvmLogPosition {
-            oldest_log_addr: self.oldest_log_addr,
             next_log_addr: self.next_log_addr,
         }
     }
@@ -85,16 +81,14 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
                 self.move_cursor_add(bytes.len() as u32)?;
-                Ok(())
             }
             NextPage { start_address } => {
                 // we will (partially) write into the next page; we must erase it first
-                self.flash
-                    .erase(start_address as u32, (start_address + F::ERASE_SIZE) as u32)?;
+                let end_address = start_address + F::ERASE_SIZE;
+                self.flash.erase(start_address as u32, end_address as u32)?;
 
                 self.flash.write(self.next_log_addr, bytes)?;
                 self.move_cursor_add(bytes.len() as u32)?;
-                Ok(())
             }
             BackToTheBeginning => {
                 // NOTE the final bytes in the last page stay 0xFF
@@ -105,9 +99,10 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
                 self.flash.write(0, bytes)?;
                 self.move_cursor_absolute(bytes.len() as u32)?;
-                Ok(())
             }
         }
+
+        Ok(())
     }
 }
 
@@ -128,12 +123,12 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
     fn move_cursor_absolute(&mut self, new: u32) -> Result<(), F::Error> {
         let mut next_oldest_log = 0;
 
-        if new >= self.oldest_log_addr {
+        if new > self.oldest_log_addr {
             for offset in new as usize..self.flash.capacity() {
                 let mut word = [0];
                 self.flash.read(offset as u32, &mut word)?;
 
-                // a NULL bytes is the COPS message sentinal (end) value
+                // a NULL bytes is the Cobs message sentinal (end) value
                 if word[0] == 0 {
                     next_oldest_log = (offset + 1) % self.flash.capacity();
                     break;
@@ -186,10 +181,12 @@ enum Span {
 
 impl Span {
     fn is_empty(&self) -> bool {
-        if let Self::Contiguous { from, to } = self {
-            from == to
-        } else {
-            false
+        match self {
+            Span::Contiguous { from, to } => from == to,
+            Span::BrokenUp { from, to } => {
+                assert!(from != to);
+                false
+            }
         }
     }
 
@@ -238,7 +235,6 @@ impl<'a, F: embedded_storage::nor_flash::ReadNorFlash, T: serde::de::Deserialize
 
         match self.nvm_log.flash.read(self.span.start(), buf) {
             Err(_e) => {
-                dbg!("flash read error");
                 None
             }
             Ok(()) => {
