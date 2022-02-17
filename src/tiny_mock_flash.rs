@@ -327,6 +327,7 @@ mod test {
 
         for i in 0..3 {
             nvm_log.store(i as u8).unwrap();
+            dbg!(&nvm_log);
         }
 
         let it = nvm_log.iter();
@@ -380,4 +381,6 @@ mod test {
 
         dbg!(messages);
     }
+
+    // oldest_log_addr can be in erased page
 }

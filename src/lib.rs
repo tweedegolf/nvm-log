@@ -1,5 +1,7 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
+use std::ops::{Range, RangeBounds};
+
 pub mod mock_flash;
 pub mod tiny_mock_flash;
 
@@ -94,25 +96,29 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
             FitsInCurrentPage => {
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
-                self.move_cursor_add(bytes.len() as u32)?;
+                self.move_cursor_add(bytes.len() as u32, None)?;
             }
             NextPage { start_address } => {
                 // we will (partially) write into the next page; we must erase it first
-                let end_address = start_address + F::ERASE_SIZE;
-                self.flash.erase(start_address as u32, end_address as u32)?;
+                let start_address = start_address as u32;
+                let end_address = start_address + F::ERASE_SIZE as u32;
+                self.flash.erase(start_address, end_address)?;
 
-                self.flash.write(self.next_log_addr, bytes)?;
-                self.move_cursor_add(bytes.len() as u32)?;
+                let offset = self.next_log_addr;
+                self.move_cursor_add(bytes.len() as u32, Some(start_address..end_address))?;
+                self.flash.write(offset, bytes)?;
             }
             BackToTheBeginning => {
                 // NOTE the final bytes in the last page stay 0xFF
                 // we rely on this fact to see if there are messages
                 // in a given piece of memory (messages always end
                 // with a NULL byte when encoded with Cobs)
-                self.flash.erase(0, F::ERASE_SIZE as u32)?;
+                let start_address = 0u32;
+                let end_address = start_address + F::ERASE_SIZE as u32;
+                self.flash.erase(start_address, end_address)?;
 
                 self.flash.write(0, bytes)?;
-                self.move_cursor_absolute(bytes.len() as u32)?;
+                self.move_cursor_absolute(bytes.len() as u32, Some(start_address..end_address))?;
             }
         }
 
@@ -124,37 +130,104 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
     /// The next_log_addr is moved forward by `added`. It may now be bigger
     /// than the `oldest_log_addr`, so it too needs to move forward to the
     /// start of the next log
-    fn move_cursor_add(&mut self, added: u32) -> NvmLogResult<(), F::Error> {
+    fn move_cursor_add(
+        &mut self,
+        added: u32,
+        erased: Option<Range<u32>>,
+    ) -> NvmLogResult<(), F::Error> {
         let new = self.next_log_addr + added;
+
         if self.next_log_addr <= self.oldest_log_addr && new > self.oldest_log_addr {
-            self.move_cursor_absolute(new)
-        } else {
-            self.next_log_addr = new;
-            Ok(())
-        }
-    }
-
-    fn move_cursor_absolute(&mut self, new: u32) -> NvmLogResult<(), F::Error> {
-        let mut next_oldest_log = 0;
-
-        if new > self.oldest_log_addr {
-            for offset in new as usize..self.flash.capacity() {
-                let mut word = [0];
-                self.flash.read(offset as u32, &mut word)?;
-
-                // a NULL bytes is the Cobs message sentinal (end) value
-                if word[0] == 0 {
-                    next_oldest_log = (offset + 1) % self.flash.capacity();
-                    break;
-                }
+            self.skip_to_next_log(new)?;
+        } else if let Some(range) = erased {
+            if range.contains(&self.oldest_log_addr) {
+                self.skip_to_next_log(range.end as u32)?;
             }
-
-            self.oldest_log_addr = next_oldest_log as u32;
         }
 
         self.next_log_addr = new;
 
         Ok(())
+    }
+
+    fn move_cursor_absolute(
+        &mut self,
+        new: u32,
+        erased: Option<Range<u32>>,
+    ) -> NvmLogResult<(), F::Error> {
+        if new > self.oldest_log_addr {
+            self.skip_to_next_log(new)?;
+        } else if let Some(range) = erased {
+            if range.contains(&self.oldest_log_addr) {
+                self.skip_to_next_log(range.end as u32)?;
+            }
+        }
+
+        self.next_log_addr = new;
+
+        Ok(())
+    }
+
+    fn next_message_boundary(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
+        for offset in start as usize..self.flash.capacity() - 1 {
+            let mut word = [0, 0];
+            self.flash
+                .read(offset as u32, &mut word)
+                .unwrap_or_else(|_| panic!());
+
+            // a NULL bytes is the Cobs message sentinal (end) value
+            if word[0] == 0 && word[1] != 0 {
+                return Ok(Some(offset as u32));
+            }
+        }
+
+        {
+            let offset = self.flash.capacity() as u32;
+            let mut word = [0];
+            self.flash
+                .read(offset - 1, &mut word)
+                .unwrap_or_else(|_| panic!());
+
+            // a NULL bytes is the Cobs message sentinal (end) value
+            if word[0] == 0 {
+                return Ok(Some(offset));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn skip_to_next_log_wrap(&mut self, start: u32) -> NvmLogResult<(), F::Error> {
+        if start == 0 {
+            // we've traversed the whole memory, but found nothing
+            self.oldest_log_addr = self.next_log_addr;
+            Ok(())
+        } else {
+            self.skip_to_next_log(0)
+        }
+    }
+
+    fn skip_to_next_log(&mut self, start: u32) -> NvmLogResult<(), F::Error> {
+        match self.next_message_boundary(start)? {
+            None => self.skip_to_next_log_wrap(start),
+            Some(boundary) => {
+                // we've found a boundary, but still need to check that a message actually follows
+                if boundary == self.flash.capacity() as u32 - 1 {
+                    // the boundary is at the last valid address;
+                    // no message can follow here, so check from the start
+                    self.skip_to_next_log_wrap(start)
+                } else {
+                    match self.next_message_boundary(boundary + 1)? {
+                        None => self.skip_to_next_log_wrap(start),
+                        Some(_next_boundary) => {
+                            // +1 because boundary is the NULL byte; next message starts 1 later
+                            self.oldest_log_addr = boundary as u32 + 1;
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
