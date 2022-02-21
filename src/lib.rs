@@ -1,9 +1,14 @@
-#![cfg_attr(all(not(test), not(feature = "std")), no_std)]
+// #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
 use std::ops::{Range, RangeBounds};
 
 pub mod mock_flash;
 pub mod tiny_mock_flash;
+
+/// The log message has not been sent or cleared
+pub const HEADER_ACTIVE: u8 = 0b1100_0000;
+/// This message has been cleared; it should not be sent/shown again
+pub const HEADER_INACTIVE: u8 = 0b1000_0000;
 
 #[derive(Debug)]
 pub struct NvmLog<F, T> {
@@ -41,6 +46,10 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
     }
 
+    pub fn free(self) -> F {
+        self.flash
+    }
+
     pub fn current_postition(&self) -> NvmLogPosition {
         NvmLogPosition {
             next_log_addr: self.next_log_addr,
@@ -50,6 +59,52 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn erase_up_to_position(&mut self, position: &NvmLogPosition) {
         self.oldest_log_addr = position.next_log_addr;
     }
+
+    pub fn restore_from_flash(flash: F) -> NvmLogResult<Self, F::Error> {
+        let mut this = Self {
+            oldest_log_addr: 0,
+            next_log_addr: 0,
+            flash,
+            _marker: core::marker::PhantomData,
+        };
+
+        let num_pages = this.flash.capacity() / F::ERASE_SIZE;
+
+        for page in 1..=num_pages {
+            let page_end = (page * F::ERASE_SIZE) as u32;
+            let last_uncleared_byte = this.last_uncleared(page_end)?;
+
+            match last_uncleared_byte {
+                Some(last_uncleared_byte) => {
+                    if last_uncleared_byte != (page_end - 1) {
+                        // we have some cleared bytes at the end of this page
+                        // dbg!(last_uncleared_byte + 1);
+                        this.next_log_addr = last_uncleared_byte + 1;
+
+                        if let Some(next_uncleared) = this.first_uncleared(this.next_log_addr)? {
+                            // this can be in the middle of a message; start at the next one
+                            match this.next_message_boundary(next_uncleared)? {
+                                Some(next_boundary) => {
+                                    this.oldest_log_addr = next_boundary + 1;
+                                }
+                                None => todo!(), // likely at the end of our memory
+                            }
+                        } else {
+                            // the remainder of the memory is cleared
+                            this.oldest_log_addr = 0;
+                        }
+
+                        break;
+                    }
+                }
+                None => {
+                    // dbg!(" end of flash?" );
+                }
+            }
+        }
+
+        Ok(this)
+    }
 }
 
 const WORKING_BUF_SIZE: usize = 1000;
@@ -57,6 +112,7 @@ const WORKING_BUF_SIZE: usize = 1000;
 #[derive(Debug)]
 enum CrossPageBoundary {
     FitsInCurrentPage,
+    EndsOnPageBoundary { next_page_start_address: usize },
     NextPage { start_address: usize },
     BackToTheBeginning,
 }
@@ -69,6 +125,7 @@ where
 
     assert!(end_address - start_address <= F::ERASE_SIZE);
 
+    let ends_at_page_boundary = (end_address) % F::ERASE_SIZE == 0;
     let starts_at_page_boundary = start_address % F::ERASE_SIZE == 0;
     let crosses_page_boundary =
         (start_address / F::ERASE_SIZE) != ((end_address - 1) / F::ERASE_SIZE);
@@ -81,7 +138,16 @@ where
                 start_address: (end_address / F::ERASE_SIZE) * F::ERASE_SIZE,
             }
         }
+    } else if ends_at_page_boundary {
+        CrossPageBoundary::EndsOnPageBoundary {
+            next_page_start_address: if end_address == flash.capacity() {
+                0
+            } else {
+                ((end_address + 1) / F::ERASE_SIZE) * F::ERASE_SIZE
+            },
+        }
     } else {
+        println!("Fits in current page: {} .. {}", start_address, end_address);
         CrossPageBoundary::FitsInCurrentPage
     }
 }
@@ -89,30 +155,79 @@ where
 impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T> {
     pub fn store(&mut self, value: T) -> NvmLogResult<(), F::Error> {
         let mut buf = [0u8; WORKING_BUF_SIZE];
-        let bytes = postcard::to_slice_cobs(&value, &mut buf).map_err(NvmLogError::Postcard)?;
+        buf[0] = HEADER_ACTIVE;
+        let used = 1 + postcard::to_slice_cobs(&value, &mut buf[1..])
+            .map_err(NvmLogError::Postcard)?
+            .len();
 
+        let bytes = &mut buf[..used];
+
+        self.store_help(bytes)
+    }
+
+    fn write_zeros(&mut self, start: u32, end: u32) -> NvmLogResult<(), F::Error> {
+        println!("zeroing {} .. {}", start, end);
+        for index in start..end {
+            self.flash.write(index, &[0])?;
+        }
+
+        Ok(())
+    }
+
+
+    fn store_help(&mut self, bytes: &mut[u8])-> NvmLogResult<(), F::Error> {
         use CrossPageBoundary::*;
-        match crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) {
+        match dbg!(crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) ){
             FitsInCurrentPage => {
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
                 self.move_cursor_add(bytes.len() as u32, None)?;
             }
+            EndsOnPageBoundary {
+                next_page_start_address,
+            } => {
+                // we pad the current page with zeros
+                let current = self.next_log_addr;
+
+                assert!(next_page_start_address % F::ERASE_SIZE  == 0);
+                
+                self.write_zeros(current, next_page_start_address as u32)?;
+
+                self.move_cursor_add(bytes.len() as _, None)?;
+
+                return self.store_help(bytes);
+            }
             NextPage { start_address } => {
+                // pad the current page with zeros
+                let current = self.next_log_addr;
+
+                if current != start_address as u32 {
+                    assert!(start_address % F::ERASE_SIZE  == 0);
+                    
+                    self.write_zeros(current, start_address as u32)?;
+
+                    self.move_cursor_add(bytes.len() as _, None)?;
+                }
+
                 // we will (partially) write into the next page; we must erase it first
                 let start_address = start_address as u32;
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
 
-                let offset = self.next_log_addr;
-                self.move_cursor_add(bytes.len() as u32, Some(start_address..end_address))?;
-                self.flash.write(offset, bytes)?;
+                self.flash.write(self.next_log_addr, bytes)?;
+                self.move_cursor_add(bytes.len() as u32, None)?;
             }
             BackToTheBeginning => {
-                // NOTE the final bytes in the last page stay 0xFF
-                // we rely on this fact to see if there are messages
-                // in a given piece of memory (messages always end
-                // with a NULL byte when encoded with Cobs)
+                // we pad the current page with zeros
+                let current = self.next_log_addr;
+                let next_page_start_address  = self.flash.capacity();
+
+                dbg!(current , next_page_start_address);
+
+                assert!(next_page_start_address % F::ERASE_SIZE  == 0);
+                
+                self.write_zeros(current, next_page_start_address  as u32)?;
+
                 let start_address = 0u32;
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
@@ -228,6 +343,32 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
                 }
             }
         }
+    }
+
+    fn first_uncleared(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
+        for index in start..self.flash.capacity() as u32 {
+            let mut output = [0];
+            self.flash.read(index, &mut output)?;
+
+            if output[0] != 0xFF {
+                return Ok(Some(index));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn last_uncleared(&mut self, end: u32) -> NvmLogResult<Option<u32>, F::Error> {
+        for index in (0..end).rev() {
+            let mut output = [0];
+            self.flash.read(index, &mut output)?;
+
+            if output[0] != 0xFF {
+                return Ok(Some(index));
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -358,6 +499,8 @@ where
 
                         let capacity = self.nvm_log.flash.capacity() as u32;
                         // +1 to skip the NULL byte
+                        // +1 to skip the HEADER byte
+                        // TODO skip if the header is inactive
                         self.span.step(message_end as u32 + 1, capacity);
                         match postcard::from_bytes_cobs(buf) {
                             Ok(e) => Some(Ok(e)),
