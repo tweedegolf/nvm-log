@@ -2,11 +2,23 @@
 
 use crate::HEADER_ACTIVE;
 use core::ops::Range;
-use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash, ReadNorFlash};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writable {
+    /// Twice
+    T,
+    /// Once (can only convert 1 bits to 0
+    O,
+    /// Never (must be cleared before being writable again)
+    N,
+}
+
+use Writable::*;
 
 #[derive(Debug, Clone)]
 struct MockFlash {
-    writable: Vec<bool>,
+    writable: Vec<Writable>,
     words: Vec<u8>,
 }
 
@@ -28,7 +40,7 @@ impl MockFlash {
 
     pub fn new() -> Self {
         Self {
-            writable: vec![true; Self::CAPACITY_WORDS],
+            writable: vec![T; Self::CAPACITY_WORDS],
             words: vec![u8::MAX; Self::CAPACITY_WORDS],
         }
     }
@@ -72,7 +84,7 @@ impl MockFlash {
         let slice = &self.writable[start_word..end_word];
         let it = (range.start..range.end).zip(slice.iter());
         for (address, writable) in it {
-            if !writable {
+            if let Writable::N = writable {
                 return Err(MockFlashError::NotWritable(address as u32));
             }
         }
@@ -106,6 +118,8 @@ impl ReadNorFlash for MockFlash {
     }
 }
 
+impl MultiwriteNorFlash for MockFlash {}
+
 impl NorFlash for MockFlash {
     const WRITE_SIZE: usize = Self::BYTES_PER_WORD;
 
@@ -132,7 +146,7 @@ impl NorFlash for MockFlash {
 
         let range = from / Self::BYTES_PER_WORD..to / Self::BYTES_PER_WORD;
         for word_writable in self.writable[range].iter_mut() {
-            *word_writable = true;
+            *word_writable = Writable::T;
         }
 
         Ok(())
@@ -148,7 +162,11 @@ impl NorFlash for MockFlash {
         self.as_bytes_mut()[range].copy_from_slice(bytes);
 
         for word_writable in self.writable[start_word..end_word].iter_mut() {
-            *word_writable = false;
+            *word_writable = match *word_writable {
+                Writable::T => Writable::O,
+                Writable::O => Writable::N,
+                Writable::N => Writable::N,
+            };
         }
 
         Ok(())
@@ -162,9 +180,19 @@ mod test {
     // use std::assert_matches::assert_matches;
 
     #[test]
-    fn double_write_gives_error() {
+    fn double_write_is_fine() {
         let mut flash = MockFlash::new();
 
+        flash.write(0, &[0xAB]).unwrap();
+
+        assert!(matches!(flash.write(0, &[0xCD]), Ok(_)))
+    }
+
+    #[test]
+    fn triple_write_gives_error() {
+        let mut flash = MockFlash::new();
+
+        flash.write(0, &[0xAB]).unwrap();
         flash.write(0, &[0xAB]).unwrap();
 
         assert!(matches!(
@@ -233,64 +261,16 @@ mod test {
             ]
         );
 
-        let mut flags = [true; 24];
+        let mut flags = [T; 24];
 
-        for i in 0..12 {
-            flags[i] = false;
+        for item in flags.iter_mut().take(12) {
+            *item = O;
         }
 
         assert_eq!(&nvm_log.flash.writable, &flags,);
     }
 
-    #[test]
-    fn write_two_words_erase_page() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
-
-        for i in 0..2 {
-            nvm_log.store(i as u8).unwrap();
-        }
-
-        nvm_log.flash.erase(8, 16).unwrap();
-
-        assert_eq!(
-            &nvm_log.flash.words,
-            &[
-                HEADER_ACTIVE,
-                1,
-                1,
-                0,
-                HEADER_ACTIVE,
-                2,
-                1,
-                0,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-                255,
-            ]
-        );
-
-        assert_eq!(
-            &nvm_log.flash.writable,
-            &[
-                false, false, false, false, false, false, false, false, true, true, true, true,
-                true, true, true, true, true, true, true, true, true, true, true, true,
-            ]
-        );
-    }
-
+    /*
     #[test]
     fn write_words_3() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
@@ -437,51 +417,125 @@ mod test {
         // next-oldest message is the first message on the second page
         assert_eq!(nvm_log.oldest_log_addr, 9);
     }
+    */
 
     #[test]
-    fn read_middle_to_back() {
+    fn read_1() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        for i in 0..1 {
+            nvm_log.store(i as u8).unwrap();
+        }
+
+        let messages: Vec<_> = nvm_log.iter().collect();
+
+        assert_eq!(vec![0], messages);
+    }
+
+    #[test]
+    fn read_2() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        for i in 0..2 {
+            nvm_log.store(i as u8).unwrap();
+        }
+
+        let messages: Vec<_> = nvm_log.iter().collect();
+
+        assert_eq!(vec![0, 1], messages);
+    }
+
+    #[test]
+    fn read_3() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
         for i in 0..3 {
             nvm_log.store(i as u8).unwrap();
-            dbg!(&nvm_log);
         }
 
-        let it = nvm_log.iter();
-
-        let messages: Vec<_> = it.collect();
+        let messages: Vec<_> = nvm_log.iter().collect();
 
         assert_eq!(vec![0, 1, 2], messages);
     }
 
     #[test]
-    fn read_full() {
+    fn read_4() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
-        for i in 0..8 {
+        for i in 0..4 {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let it = nvm_log.iter();
+        let messages: Vec<_> = nvm_log.iter().collect();
 
-        let messages: Vec<_> = it.collect();
-
-        assert_eq!(vec![0, 1, 2, 3, 4, 5, 6, 7], messages);
+        assert_eq!(vec![1, 2, 3], messages);
     }
 
     #[test]
-    fn read_disjoint() {
+    fn write_1_erase_1() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
-        for i in 0..9 {
+        for i in 0..1 {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let it = nvm_log.iter();
+        let position = nvm_log.current_postition();
+        nvm_log.erase_up_to_position(&position).unwrap();
 
-        let messages: Vec<_> = it.collect();
+        let messages: Vec<u8> = nvm_log.iter().collect();
+        let expected: Vec<u8> = vec![];
 
-        assert_eq!(vec![3, 4, 5, 6, 7, 8], messages);
+        assert_eq!(expected, messages);
+    }
+
+    #[test]
+    fn write_2_erase_2() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        for i in 0..2 {
+            nvm_log.store(i as u8).unwrap();
+        }
+
+        let position = nvm_log.current_postition();
+        nvm_log.erase_up_to_position(&position).unwrap();
+
+        let messages: Vec<u8> = nvm_log.iter().collect();
+        let expected: Vec<u8> = vec![];
+
+        assert_eq!(expected, messages);
+    }
+
+    #[test]
+    fn write_2_erase_1() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        nvm_log.store(0).unwrap();
+        let position = nvm_log.current_postition();
+        nvm_log.store(1).unwrap();
+
+        nvm_log.erase_up_to_position(&position).unwrap();
+
+        let messages: Vec<u8> = nvm_log.iter().collect();
+        let expected: Vec<u8> = vec![1];
+
+        assert_eq!(expected, messages);
+    }
+
+    #[test]
+    fn write_3_erase_1() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        nvm_log.store(0).unwrap();
+        let position = nvm_log.current_postition();
+        nvm_log.store(1).unwrap();
+        nvm_log.store(2).unwrap();
+
+        nvm_log.erase_up_to_position(&position).unwrap();
+
+        let messages: Vec<u8> = nvm_log.iter().collect();
+        let expected: Vec<u8> = vec![1, 2];
+
+        assert_eq!(expected, messages);
     }
 
     fn recover_n(n: usize) {
@@ -491,13 +545,13 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let old = (nvm_log.oldest_log_addr, nvm_log.next_log_addr);
+        let old = nvm_log.next_log_addr;
 
         let flash = nvm_log.free();
 
         let nvm_log: NvmLog<MockFlash, u8> = NvmLog::restore_from_flash(flash).unwrap();
 
-        let new = (nvm_log.oldest_log_addr, nvm_log.next_log_addr);
+        let new = nvm_log.next_log_addr;
 
         assert_eq!(old, new, "{:?}", nvm_log.flash.words);
     }
@@ -518,32 +572,13 @@ mod test {
     }
 
     #[test]
-    fn recover_3() {
-        recover_n(3);
-    }
-
-    #[test]
-    fn recover_4() {
-        recover_n(4);
-    }
-
-    #[test]
-    fn recover_9() {
-        recover_n(9);
-    }
-
-    #[test]
-    fn recover_11() {
-        recover_n(11);
-    }
-
-    #[test]
     fn recover_many() {
         for n in 0..20 {
             println!(" {}", n);
             recover_n(n);
         }
     }
+    /*
 
     #[test]
     fn foobar() {
@@ -562,4 +597,5 @@ mod test {
     }
 
     // oldest_log_addr can be in erased page
+    */
 }
