@@ -174,10 +174,13 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
         Ok(())
     }
 
-
-    fn store_help(&mut self, bytes: &mut[u8])-> NvmLogResult<(), F::Error> {
+    fn store_help(&mut self, bytes: &mut [u8]) -> NvmLogResult<(), F::Error> {
         use CrossPageBoundary::*;
-        match dbg!(crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) ){
+        match dbg!(crosses_page_boundary(
+            &self.flash,
+            self.next_log_addr as usize,
+            bytes
+        )) {
             FitsInCurrentPage => {
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
@@ -189,8 +192,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 // we pad the current page with zeros
                 let current = self.next_log_addr;
 
-                assert!(next_page_start_address % F::ERASE_SIZE  == 0);
-                
+                assert!(next_page_start_address % F::ERASE_SIZE == 0);
+
                 self.write_zeros(current, next_page_start_address as u32)?;
 
                 self.move_cursor_add(bytes.len() as _, None)?;
@@ -202,8 +205,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 let current = self.next_log_addr;
 
                 if current != start_address as u32 {
-                    assert!(start_address % F::ERASE_SIZE  == 0);
-                    
+                    assert!(start_address % F::ERASE_SIZE == 0);
+
                     self.write_zeros(current, start_address as u32)?;
 
                     self.move_cursor_add(bytes.len() as _, None)?;
@@ -220,13 +223,13 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
             BackToTheBeginning => {
                 // we pad the current page with zeros
                 let current = self.next_log_addr;
-                let next_page_start_address  = self.flash.capacity();
+                let next_page_start_address = self.flash.capacity();
 
-                dbg!(current , next_page_start_address);
+                dbg!(current, next_page_start_address);
 
-                assert!(next_page_start_address % F::ERASE_SIZE  == 0);
-                
-                self.write_zeros(current, next_page_start_address  as u32)?;
+                assert!(next_page_start_address % F::ERASE_SIZE == 0);
+
+                self.write_zeros(current, next_page_start_address as u32)?;
 
                 let start_address = 0u32;
                 let end_address = start_address + F::ERASE_SIZE as u32;

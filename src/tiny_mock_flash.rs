@@ -210,7 +210,10 @@ mod test {
                 1,
                 1,
                 0,
-                0,0,0,0,
+                0,
+                0,
+                0,
+                0,
                 HEADER_ACTIVE,
                 2,
                 1,
@@ -230,16 +233,13 @@ mod test {
             ]
         );
 
-        let mut flags = [ true; 24];
+        let mut flags = [true; 24];
 
-        for i in 0..12 { 
+        for i in 0..12 {
             flags[i] = false;
         }
 
-        assert_eq!(
-            &nvm_log.flash.writable,
-            &flags,
-        );
+        assert_eq!(&nvm_log.flash.writable, &flags,);
     }
 
     #[test]
@@ -299,7 +299,6 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-
         assert_eq!(
             &nvm_log.flash.words,
             &[
@@ -330,16 +329,13 @@ mod test {
             ]
         );
 
-        let mut flags = [ true; 24];
+        let mut flags = [true; 24];
 
-        for i in 0..20 { 
+        for i in 0..20 {
             flags[i] = false;
         }
 
-        assert_eq!(
-            &nvm_log.flash.writable,
-            &flags,
-        );
+        assert_eq!(&nvm_log.flash.writable, &flags,);
     }
 
     #[test]
@@ -350,7 +346,6 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-
         assert_eq!(
             &nvm_log.flash.words,
             &[
@@ -381,16 +376,13 @@ mod test {
             ]
         );
 
-        let mut flags = [ true; 24];
+        let mut flags = [true; 24];
 
-        for i in 0..20 { 
+        for i in 0..20 {
             flags[i] = false;
         }
 
-        assert_eq!(
-            &nvm_log.flash.writable,
-            &flags,
-        );
+        assert_eq!(&nvm_log.flash.writable, &flags,);
     }
 
     #[test]
@@ -403,7 +395,10 @@ mod test {
 
         assert_eq!(
             &nvm_log.flash.words,
-            &[192, 1, 1, 0, 192, 2, 1, 0, 192, 2, 2, 0, 192, 2, 3, 0, 192, 2, 4, 0, 255, 255, 255, 255]
+            &[
+                192, 1, 1, 0, 192, 2, 1, 0, 192, 2, 2, 0, 192, 2, 3, 0, 192, 2, 4, 0, 255, 255,
+                255, 255
+            ]
         );
 
         assert_eq!(
