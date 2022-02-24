@@ -2,7 +2,9 @@
 
 use crate::HEADER_ACTIVE;
 use core::ops::Range;
-use embedded_storage::nor_flash::{MultiwriteNorFlash, NorFlash, ReadNorFlash};
+use embedded_storage::nor_flash::{
+    ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Writable {
@@ -62,7 +64,7 @@ impl MockFlash {
 
         #[allow(clippy::modulo_one)]
         if (offset % Self::BYTES_PER_WORD) != 0 {
-            Err(MockFlashError::Misaligned)
+            Err(MockFlashError::NotAligned)
         } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES
         {
             Err(MockFlashError::OutOfBounds)
@@ -96,13 +98,25 @@ impl MockFlash {
 #[derive(Debug)]
 enum MockFlashError {
     OutOfBounds,
-    Misaligned,
+    NotAligned,
     NotWritable(u32),
 }
 
-impl ReadNorFlash for MockFlash {
-    type Error = MockFlashError;
+impl NorFlashError for MockFlashError {
+    fn kind(&self) -> NorFlashErrorKind {
+        match self {
+            MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
+            MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
+            MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
+        }
+    }
+}
 
+impl ErrorType for MockFlash {
+    type Error = MockFlashError;
+}
+
+impl ReadNorFlash for MockFlash {
     const READ_SIZE: usize = Self::BYTES_PER_WORD;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
@@ -137,7 +151,7 @@ impl NorFlash for MockFlash {
         }
 
         if from % Self::PAGE_BYTES != 0 || to % Self::PAGE_BYTES != 0 {
-            return Err(MockFlashError::Misaligned);
+            return Err(MockFlashError::NotAligned);
         }
 
         for byte in self.as_bytes_mut()[from..to].iter_mut() {

@@ -10,7 +10,7 @@ default = [ "std" ]
 std = []
 
 [dependencies]
-embedded-storage = "0.2.0"
+embedded-storage = "0.3.0"
 postcard = "0.7.2"
 
 # By default, `serde` has the `std` feature enabled, which makes it unsuitable for embedded targets

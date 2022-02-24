@@ -1,7 +1,9 @@
 #![cfg(feature = "std")]
 
 use core::ops::Range;
-use embedded_storage::nor_flash::{NorFlash, ReadNorFlash};
+use embedded_storage::nor_flash::{
+    ErrorType, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
+};
 
 pub struct MockFlash {
     writable: Vec<bool>,
@@ -46,7 +48,7 @@ impl MockFlash {
     fn validate_read_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
         if (offset % Self::BYTES_PER_WORD) != 0 {
-            Err(MockFlashError::Misaligned)
+            Err(MockFlashError::NotAligned)
         } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES
         {
             Err(MockFlashError::OutOfBounds)
@@ -80,13 +82,25 @@ impl MockFlash {
 #[derive(Debug)]
 pub enum MockFlashError {
     OutOfBounds,
-    Misaligned,
+    NotAligned,
     NotWritable(u32),
 }
 
-impl ReadNorFlash for MockFlash {
-    type Error = MockFlashError;
+impl NorFlashError for MockFlashError {
+    fn kind(&self) -> NorFlashErrorKind {
+        match self {
+            MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
+            MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
+            MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
+        }
+    }
+}
 
+impl ErrorType for MockFlash {
+    type Error = MockFlashError;
+}
+
+impl ReadNorFlash for MockFlash {
     const READ_SIZE: usize = Self::BYTES_PER_WORD;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
@@ -118,7 +132,7 @@ impl NorFlash for MockFlash {
         }
 
         if from % Self::PAGE_BYTES != 0 || to % Self::PAGE_BYTES != 0 {
-            return Err(MockFlashError::Misaligned);
+            return Err(MockFlashError::NotAligned);
         }
 
         for byte in self.as_bytes_mut()[from..to].iter_mut() {
@@ -174,7 +188,7 @@ mod test {
 
         assert!(matches!(
             flash.read(1, &mut output),
-            Err(MockFlashError::Misaligned)
+            Err(MockFlashError::NotAligned)
         ))
     }
 
@@ -184,7 +198,7 @@ mod test {
 
         assert!(matches!(
             flash.write(1, &[0xCD]),
-            Err(MockFlashError::Misaligned)
+            Err(MockFlashError::NotAligned)
         ))
     }
 

@@ -1,4 +1,4 @@
-// #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
+#![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
 pub mod mock_flash;
 pub mod tiny_mock_flash;
@@ -203,7 +203,6 @@ where
             }
         }
     } else {
-        println!("Fits in current page: {} .. {}", start_address, end_address);
         CrossPageBoundary::FitsInCurrentPage
     }
 }
@@ -221,9 +220,16 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
         self.store_help(bytes)
     }
 
-    fn write_zeros(&mut self, start: u32, end: u32) -> NvmLogResult<(), F::Error> {
-        for index in start..end {
-            self.flash.write(index, &[0])?;
+    fn write_zeros(&mut self, mut start: u32, end: u32) -> NvmLogResult<(), F::Error> {
+        const ZS: usize = 64;
+        const ZEROS: [u8; ZS] = [0; ZS];
+
+        while start != end {
+            let remaining = (end - start).min(ZS as u32) as usize;
+
+            self.flash.write(start, &ZEROS[..remaining])?;
+
+            start += remaining as u32;
         }
 
         Ok(())
@@ -284,9 +290,7 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
     fn next_message_boundary(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         for offset in start as usize..self.flash.capacity() - 1 {
             let mut word = [0, 0];
-            self.flash
-                .read(offset as u32, &mut word)
-                .unwrap_or_else(|_| panic!());
+            self.flash.read(offset as u32, &mut word)?;
 
             // a NULL bytes is the Cobs message sentinal (end) value
             if word[0] == 0 && word[1] != 0 {
@@ -297,9 +301,7 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
         {
             let offset = self.flash.capacity() as u32;
             let mut word = [0];
-            self.flash
-                .read(offset - 1, &mut word)
-                .unwrap_or_else(|_| panic!());
+            self.flash.read(offset - 1, &mut word)?;
 
             // a NULL bytes is the Cobs message sentinal (end) value
             if word[0] == 0 {
@@ -366,7 +368,6 @@ where
     type Item = NvmLogResult<T, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        dbg!(self.next_log_addr, self.nvm_log.next_log_addr);
         if self.next_log_addr == self.nvm_log.next_log_addr {
             return None;
         }
@@ -444,7 +445,6 @@ where
     type Item = NvmLogResult<u32, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        dbg!(self.next_log_addr, self.stop_at);
         if self.next_log_addr == self.nvm_log.next_log_addr || self.next_log_addr == self.stop_at {
             return None;
         }
@@ -494,7 +494,6 @@ where
                             self.next_log_addr += msg_buf.len() as u32 + 1;
                         }
 
-                        eprintln!("erasing at index {}", current_index);
                         match msg_buf.get(0).copied() {
                             Some(HEADER_ACTIVE) => {
                                 let header_addr = current_index;
