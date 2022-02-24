@@ -1,7 +1,5 @@
 // #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
-use std::ops::{Range, RangeBounds};
-
 pub mod mock_flash;
 pub mod tiny_mock_flash;
 
@@ -54,6 +52,9 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
     }
 
+    /// Restore the state of the NvmLog (specifically, where should the next message go)
+    /// from the information stored in flash. Assumes that either there are valid logs there,
+    /// or the used pages have been cleared
     pub fn restore_from_flash(flash: F) -> NvmLogResult<Self, F::Error> {
         let mut this = Self {
             next_log_addr: 0,
@@ -67,17 +68,23 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             let mut page_end = [0, 0];
             this.flash.read(next_page_start as u32 - 2, &mut page_end)?;
 
+            // a full (sealed) page always ends in NULL NULL. Hence, if this page
+            // ends in a 0xFF then either it is only partially written, or it's completely
+            // blank (meaning it's full of 0xFF's)
             if page_end == [0xFF, 0xFF] {
                 match this.last_uncleared(next_page_start as u32)? {
                     None => {
-                        // full page is cleared
+                        // The whole page is filled with 0xFF's
                         this.next_log_addr = (next_page_start - F::ERASE_SIZE) as u32;
                     }
                     Some(last) => {
+                        // Part of the page is filled; start after the last message
                         this.next_log_addr = last + 1;
                     }
                 }
 
+                // we have found the left-most page that has space available for new logs
+                // that's what we were looking for; break and return
                 break;
             }
         }
@@ -157,12 +164,11 @@ where
     }
 }
 
-const WORKING_BUF_SIZE: usize = 1000;
+const WORKING_BUF_SIZE: usize = 1024;
 
 #[derive(Debug)]
 enum CrossPageBoundary {
     FitsInCurrentPage,
-    EndsOnPageBoundary { next_page_start_address: usize },
     NextPage { start_address: usize },
     BackToTheBeginning,
 }
@@ -189,12 +195,12 @@ where
             }
         }
     } else if ends_at_page_boundary {
-        CrossPageBoundary::EndsOnPageBoundary {
-            next_page_start_address: if end_address == flash.capacity() {
-                0
-            } else {
-                page_start(end_address as u32 + 1, F::ERASE_SIZE as u32) as _
-            },
+        if end_address == flash.capacity() {
+            CrossPageBoundary::BackToTheBeginning
+        } else {
+            CrossPageBoundary::NextPage {
+                start_address: page_start(end_address as u32 + 1, F::ERASE_SIZE as u32) as _,
+            }
         }
     } else {
         println!("Fits in current page: {} .. {}", start_address, end_address);
@@ -216,7 +222,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
     }
 
     fn write_zeros(&mut self, start: u32, end: u32) -> NvmLogResult<(), F::Error> {
-        println!("zeroing {} .. {}", start, end);
         for index in start..end {
             self.flash.write(index, &[0])?;
         }
@@ -226,29 +231,11 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
     fn store_help(&mut self, bytes: &mut [u8]) -> NvmLogResult<(), F::Error> {
         use CrossPageBoundary::*;
-        match dbg!(crosses_page_boundary(
-            &self.flash,
-            self.next_log_addr as usize,
-            bytes
-        )) {
+        match crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) {
             FitsInCurrentPage => {
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
                 self.next_log_addr += bytes.len() as u32;
-            }
-            EndsOnPageBoundary {
-                next_page_start_address,
-            } => {
-                // we pad the current page with zeros
-                let current = self.next_log_addr;
-
-                assert!(next_page_start_address % F::ERASE_SIZE == 0);
-
-                self.write_zeros(current, next_page_start_address as u32)?;
-
-                self.next_log_addr += bytes.len() as u32;
-
-                return self.store_help(bytes);
             }
             NextPage { start_address } => {
                 // pad the current page with zeros
@@ -259,7 +246,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
                     self.write_zeros(current, start_address as u32)?;
 
-                    self.move_cursor_add(bytes.len() as _, None)?;
+                    self.next_log_addr += bytes.len() as u32;
                 }
 
                 // we will (partially) write into the next page; we must erase it first
@@ -268,14 +255,12 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 self.flash.erase(start_address, end_address)?;
 
                 self.flash.write(self.next_log_addr, bytes)?;
-                self.move_cursor_add(bytes.len() as u32, None)?;
+                self.next_log_addr += bytes.len() as u32;
             }
             BackToTheBeginning => {
                 // we pad the current page with zeros
                 let current = self.next_log_addr;
                 let next_page_start_address = self.flash.capacity();
-
-                dbg!(current, next_page_start_address);
 
                 assert!(next_page_start_address % F::ERASE_SIZE == 0);
 
@@ -286,7 +271,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 self.flash.erase(start_address, end_address)?;
 
                 self.flash.write(0, bytes)?;
-                self.move_cursor_absolute(bytes.len() as u32, Some(start_address..end_address))?;
+
+                self.next_log_addr = bytes.len() as u32;
             }
         }
 
@@ -295,28 +281,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 }
 
 impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
-    fn move_cursor_add(
-        &mut self,
-        added: u32,
-        erased: Option<Range<u32>>,
-    ) -> NvmLogResult<(), F::Error> {
-        let new = self.next_log_addr + added;
-
-        self.next_log_addr = new;
-
-        Ok(())
-    }
-
-    fn move_cursor_absolute(
-        &mut self,
-        new: u32,
-        erased: Option<Range<u32>>,
-    ) -> NvmLogResult<(), F::Error> {
-        self.next_log_addr = new;
-
-        Ok(())
-    }
-
     fn next_message_boundary(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         for offset in start as usize..self.flash.capacity() - 1 {
             let mut word = [0, 0];
@@ -370,51 +334,6 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
         }
 
         Ok(None)
-    }
-}
-
-enum Span {
-    /// A contiguous chunk
-    Contiguous { from: u32, to: u32 },
-    /// The region wraps around somewhere
-    BrokenUp { from: u32, to: u32 },
-}
-
-impl Span {
-    fn is_empty(&self) -> bool {
-        match self {
-            Span::Contiguous { from, to } => from == to,
-            Span::BrokenUp { from, to } => {
-                assert!(from != to);
-                false
-            }
-        }
-    }
-
-    fn start(&self) -> u32 {
-        match self {
-            Self::Contiguous { from, .. } | Self::BrokenUp { from, .. } => *from,
-        }
-    }
-
-    fn step(&mut self, width: u32, capacity: u32) {
-        match self {
-            Self::Contiguous { from, .. } => {
-                *from += width;
-                assert!(*from <= capacity);
-            }
-            Self::BrokenUp { from, .. } => {
-                *from += width;
-                assert!(*from <= capacity);
-            }
-        }
-    }
-
-    fn wrap(&mut self) {
-        match &self {
-            Self::Contiguous { to, .. } => *self = Self::Contiguous { from: *to, to: *to },
-            Self::BrokenUp { to, .. } => *self = Self::Contiguous { from: 0, to: *to },
-        }
     }
 }
 
