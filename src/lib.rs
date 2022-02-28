@@ -15,8 +15,25 @@ pub struct NvmLog<F, T> {
     _marker: core::marker::PhantomData<T>,
 }
 
+#[derive(Default)]
 pub struct NvmLogPosition {
     next_log_addr: u32,
+}
+
+fn last_uncleared<F>(flash: &mut F, end: u32) -> NvmLogResult<Option<u32>, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    for index in (0..end).rev() {
+        let mut output = [0];
+        flash.read(index, &mut output)?;
+
+        if output[0] != 0xFF {
+            return Ok(Some(index));
+        }
+    }
+
+    Ok(None)
 }
 
 #[derive(Debug)]
@@ -42,11 +59,20 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
     }
 
-    pub fn free(self) -> F {
-        self.flash
+    pub fn new_at_position(flash: F, position: NvmLogPosition) -> Self {
+        Self {
+            next_log_addr: position.next_log_addr,
+            flash,
+            _marker: core::marker::PhantomData,
+        }
     }
 
-    pub fn current_postition(&self) -> NvmLogPosition {
+    pub fn free(self) -> (F, NvmLogPosition) {
+        let position = self.current_position();
+        (self.flash, position)
+    }
+
+    pub fn current_position(&self) -> NvmLogPosition {
         NvmLogPosition {
             next_log_addr: self.next_log_addr,
         }
@@ -55,31 +81,27 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     /// Restore the state of the NvmLog (specifically, where should the next message go)
     /// from the information stored in flash. Assumes that either there are valid logs there,
     /// or the used pages have been cleared
-    pub fn restore_from_flash(flash: F) -> NvmLogResult<Self, F::Error> {
-        let mut this = Self {
-            next_log_addr: 0,
-            flash,
-            _marker: core::marker::PhantomData,
-        };
+    pub fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
+        let num_pages = flash.capacity() / F::ERASE_SIZE;
 
-        let num_pages = this.flash.capacity() / F::ERASE_SIZE;
+        let mut position = NvmLogPosition::default();
 
         for next_page_start in (1..=num_pages).map(|x| x * F::ERASE_SIZE) {
             let mut page_end = [0, 0];
-            this.flash.read(next_page_start as u32 - 2, &mut page_end)?;
+            flash.read(next_page_start as u32 - 2, &mut page_end)?;
 
             // a full (sealed) page always ends in NULL NULL. Hence, if this page
             // ends in a 0xFF then either it is only partially written, or it's completely
             // blank (meaning it's full of 0xFF's)
             if page_end == [0xFF, 0xFF] {
-                match this.last_uncleared(next_page_start as u32)? {
+                match last_uncleared(flash, next_page_start as u32)? {
                     None => {
                         // The whole page is filled with 0xFF's
-                        this.next_log_addr = (next_page_start - F::ERASE_SIZE) as u32;
+                        position.next_log_addr = (next_page_start - F::ERASE_SIZE) as u32;
                     }
                     Some(last) => {
                         // Part of the page is filled; start after the last message
-                        this.next_log_addr = last + 1;
+                        position.next_log_addr = last + 1;
                     }
                 }
 
@@ -89,7 +111,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             }
         }
 
-        Ok(this)
+        Ok(position)
     }
 }
 

@@ -493,7 +493,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let position = nvm_log.current_postition();
+        let position = nvm_log.current_position();
         nvm_log.erase_up_to_position(&position).unwrap();
 
         let messages: Vec<u8> = nvm_log.iter().collect();
@@ -510,7 +510,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let position = nvm_log.current_postition();
+        let position = nvm_log.current_position();
         nvm_log.erase_up_to_position(&position).unwrap();
 
         let messages: Vec<u8> = nvm_log.iter().collect();
@@ -524,7 +524,7 @@ mod test {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
         nvm_log.store(0).unwrap();
-        let position = nvm_log.current_postition();
+        let position = nvm_log.current_position();
         nvm_log.store(1).unwrap();
 
         nvm_log.erase_up_to_position(&position).unwrap();
@@ -540,7 +540,7 @@ mod test {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
         nvm_log.store(0).unwrap();
-        let position = nvm_log.current_postition();
+        let position = nvm_log.current_position();
         nvm_log.store(1).unwrap();
         nvm_log.store(2).unwrap();
 
@@ -561,7 +561,7 @@ mod test {
 
         let old = nvm_log.next_log_addr;
 
-        let flash = nvm_log.free();
+        let (flash, _) = nvm_log.free();
 
         let nvm_log: NvmLog<MockFlash, u8> = NvmLog::restore_from_flash(flash).unwrap();
 
