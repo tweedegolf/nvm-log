@@ -17,7 +17,7 @@ impl Default for MockFlash {
 }
 
 impl MockFlash {
-    const PAGES: usize = 256;
+    const PAGES: usize = 3; // 256;
     const BYTES_PER_WORD: usize = 4;
 
     const CAPACITY_WORDS: usize = Self::PAGES * Self::PAGE_WORDS;
@@ -166,6 +166,9 @@ impl NorFlash for MockFlash {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::{NvmLog, NvmLogPosition};
+    use arrayvec::ArrayString;
+    use serde::{Deserialize, Serialize};
     // use std::assert_matches::assert_matches;
 
     #[test]
@@ -222,5 +225,188 @@ mod test {
             flash.write(MockFlash::CAPACITY_BYTES as u32 + 4, &[0xCD]),
             Err(MockFlashError::OutOfBounds)
         ))
+    }
+
+    /// Unix time in milliseconds
+    #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
+    pub struct DateTime(i64);
+
+    #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+    pub enum TickToUnixResult {
+        /// The tick time was converted to a unix time
+        Success(DateTime),
+        /// The system clock has not been synchronized with the network
+        /// so it is impossible to give an accurate date time
+        NotSynchronized,
+    }
+    #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+    pub enum LogMessage {
+        /// An error occurred while reading a message from the NVM logs.
+        /// Contains the start address of the message.
+        NvmLogReadError(u32),
+        /// The LTE-M/GPS modem crashed
+        ModemCrash,
+        /// The device just booted
+        DeviceBoot,
+        /// A resetreason was found
+        ResetCode(ArrayString<64>),
+        /// The LTE modem timed out for some reason
+        LteTimeout,
+        /// There was a panic.
+        /// We need to limit the bytes to stay within [crate::nvm_log::WORKING_BUF_SIZE].
+        Panic(ArrayString<192>),
+        /// We woke up from movement
+        MovementReported,
+        /// The time was not synchronized with the network.
+        /// For sending messages to the server, we rely on the time being synchronized.
+        TimeNotSynchronized,
+        /// The firmware was updated to a new version
+        FirmwareUpdated,
+        // Adding new variants is OK, but do not alter their value
+    }
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct LogEntry {
+        pub msg: LogMessage,
+        pub timestamp: TickToUnixResult,
+    }
+
+    #[test]
+    fn decode_our_logs() {
+        const MEMORY: [u8; 40] = [
+            192, 3, 2, 1, 0, 0, 0, 0, 192, 12, 3, 8, 87, 97, 116, 99, 104, 100, 111, 103, 1, 0, 0,
+            0, 192, 2, 6, 7, 156, 95, 149, 64, 127, 1, 1, 1, 0, 0, 0, 0,
+        ];
+
+        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
+
+        let mut flash = MockFlash::new();
+        // flash.words[..9].copy_from_slice(&memory_u32);
+
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new(flash);
+
+        let entry = LogEntry {
+            msg: LogMessage::DeviceBoot,
+            timestamp: TickToUnixResult::NotSynchronized,
+        };
+        nvm_log.store(entry.clone()).unwrap();
+        nvm_log.store(entry).unwrap();
+
+        dbg!(&nvm_log.flash.words[..15]);
+
+        let messages: Vec<_> = nvm_log.iter().collect();
+        // let expected: Vec<u8> = vec![1, 2];
+
+        // assert_eq!(expected, messages);
+        dbg!(&messages);
+    }
+
+    #[test]
+    fn decode_our_logs_from_memory() {
+        use LogMessage::*;
+        use TickToUnixResult::*;
+
+        const MEMORY: [u8; 40] = [
+            192, 3, 2, 1, 0, 0, 0, 0, 192, 12, 3, 8, 87, 97, 116, 99, 104, 100, 111, 103, 1, 0, 0,
+            0, 192, 2, 6, 7, 156, 95, 149, 64, 127, 1, 1, 1, 0, 0, 0, 0,
+        ];
+
+        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
+
+        let mut flash = MockFlash::new();
+        flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
+
+        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+
+        dbg!(&nvm_log.flash.words[..15]);
+
+        let messages: Vec<_> = nvm_log.iter().collect();
+        let expected: Vec<LogEntry> = vec![
+            LogEntry {
+                msg: DeviceBoot,
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: MovementReported,
+                timestamp: Success(DateTime(1646056005532)),
+            },
+        ];
+
+        assert_eq!(expected, messages);
+    }
+
+    #[test]
+    fn decode_our_logs_after_writing() {
+        use LogMessage::*;
+        use TickToUnixResult::*;
+
+        let flash = MockFlash::new();
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+
+        let expected: Vec<LogEntry> = vec![
+            LogEntry {
+                msg: DeviceBoot,
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: MovementReported,
+                timestamp: Success(DateTime(1646056005532)),
+            },
+        ];
+
+        for msg in expected.clone() {
+            nvm_log.store(msg).unwrap();
+        }
+
+        let messages: Vec<_> = nvm_log.iter().collect();
+
+        assert_eq!(expected, messages);
+    }
+
+    #[test]
+    fn foobar() {
+        use LogMessage::*;
+        use TickToUnixResult::*;
+
+        const MEMORY: [u8; 256] = [
+            192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82,
+            101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 17, 3, 13, 87, 97, 107, 101,
+            117, 112, 70, 114, 111, 109, 79, 102, 102, 1, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15,
+            3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1,
+            0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0,
+            0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101,
+            116, 82, 101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121,
+            115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        ];
+
+        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
+
+        let mut flash = MockFlash::new();
+        flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
+
+        // let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let nvm_log: NvmLog<MockFlash, LogEntry> =
+            NvmLog::new_at_position(flash, NvmLogPosition { next_log_addr: 168 });
+
+        dbg!(&nvm_log.flash.words[..15]);
+
+        let messages: Vec<_> = nvm_log.result_iter().collect();
+
+        // let expected: Vec<_> = vec![];
+        // assert_eq!(expected, messages);
+
+        dbg!(&messages);
     }
 }

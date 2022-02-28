@@ -252,14 +252,14 @@ mod test {
                 1,
                 1,
                 0,
-                0,
-                0,
-                0,
-                0,
                 HEADER_ACTIVE,
                 2,
                 1,
                 0,
+                255,
+                255,
+                255,
+                255,
                 255,
                 255,
                 255,
@@ -277,7 +277,7 @@ mod test {
 
         let mut flags = [T; 24];
 
-        for item in flags.iter_mut().take(12) {
+        for item in flags.iter_mut().take(8) {
             *item = O;
         }
 
@@ -482,7 +482,7 @@ mod test {
 
         let messages: Vec<_> = nvm_log.iter().collect();
 
-        assert_eq!(vec![1, 2, 3], messages);
+        assert_eq!(vec![0, 1, 2, 3], messages);
     }
 
     #[test]
@@ -561,11 +561,12 @@ mod test {
 
         let old = nvm_log.next_log_addr;
 
-        let (flash, _) = nvm_log.free();
+        let (mut flash, _) = nvm_log.free();
 
-        let nvm_log: NvmLog<MockFlash, u8> = NvmLog::restore_from_flash(flash).unwrap();
+        let new_position = NvmLog::<MockFlash, u8>::restore_from_flash(&mut flash).unwrap();
+        let nvm_log = NvmLog::<MockFlash, u8>::new_at_position(flash, new_position);
 
-        let new = nvm_log.next_log_addr;
+        let new = new_position.next_log_addr;
 
         assert_eq!(old, new, "{:?}", nvm_log.flash.words);
     }

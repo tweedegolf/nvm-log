@@ -17,5 +17,7 @@ postcard = "0.7.2"
 # disabling default-features fixes this
 serde = { version = "1.0.*", default-features = false }
 
-[dev-depencencies]
+[dev-dependencies]
 serde_derive = { version = "1.0.*", default-features = false }
+arrayvec = { version = "0.6", features = ["serde"], default-features = false }
+
