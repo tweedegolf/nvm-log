@@ -25,9 +25,9 @@ where
     F: embedded_storage::nor_flash::NorFlash,
 {
     let mut bytes = [0; 16];
-    let bytes = &mut bytes[..F::READ_SIZE];
+    let bytes = &mut bytes[..F::WRITE_SIZE];
 
-    for index in (0..end).step_by(F::READ_SIZE).rev() {
+    for index in (0..end).step_by(F::WRITE_SIZE).rev() {
         flash.read(index, bytes)?;
 
         if bytes.iter().any(|x| *x != 0xFF) {
@@ -96,8 +96,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
 
         for next_page_start in (1..=num_pages).map(|x| x * F::ERASE_SIZE) {
             let page_end = &mut [0; 16];
-            let page_end = &mut page_end[..F::READ_SIZE];
-            flash.read(next_page_start as u32 - F::READ_SIZE as u32, page_end)?;
+            let page_end = &mut page_end[..F::WRITE_SIZE];
+            flash.read(next_page_start as u32 - F::WRITE_SIZE as u32, page_end)?;
 
             // a full (sealed) page always ends in NULL. Hence, if this page
             // ends in a 0xFF then either it is only partially written, or it's completely
@@ -110,7 +110,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
                     }
                     Some(last) => {
                         // Part of the page is filled; start after the last message
-                        position.next_log_addr = round_to_multiple_of(last + 1, F::READ_SIZE as _);
+                        position.next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
                     }
                 }
 
@@ -312,21 +312,21 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
     }
 }
 
-impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
+impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        let mut it = (start as usize..self.flash.capacity()).step_by(F::READ_SIZE);
+        let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
         while let Some(offset) = it.next() {
             let word = &mut [0; 16];
-            let word = &mut word[..F::READ_SIZE];
+            let word = &mut word[..F::WRITE_SIZE];
             self.flash.read(offset as u32, word)?;
 
             // a NULL bytes is the Cobs message sentinal (end) value
             // also we padd words with 0 bytes, so if the final byte
             // of the word is a NULL, the word must contain a NULL sentinel (and possibly some
             // padding), and the next word starts a new message (or is empty)
-            if word[F::READ_SIZE - 1] == 0 {
-                return Ok(Some((offset + F::READ_SIZE) as u32));
+            if word[F::WRITE_SIZE - 1] == 0 {
+                return Ok(Some((offset + F::WRITE_SIZE) as u32));
             }
         }
 
@@ -335,7 +335,7 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
 
     fn contains_message_header(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         let word = &mut [0; 16];
-        let word = &mut word[..F::READ_SIZE];
+        let word = &mut word[..F::WRITE_SIZE];
         self.flash.read(start as u32, word)?;
 
         if word[0] == HEADER_ACTIVE || word[0] == HEADER_INACTIVE {
@@ -360,9 +360,9 @@ impl<F: embedded_storage::nor_flash::ReadNorFlash, T> NvmLog<F, T> {
 
     fn last_uncleared(&mut self, end: u32) -> NvmLogResult<Option<u32>, F::Error> {
         let mut bytes = [0; 16];
-        let bytes = &mut bytes[..F::READ_SIZE];
+        let bytes = &mut bytes[..F::WRITE_SIZE];
 
-        for index in (0..end).step_by(F::READ_SIZE).rev() {
+        for index in (0..end).step_by(F::WRITE_SIZE).rev() {
             self.flash.read(index, bytes)?;
 
             if bytes.iter().any(|x| *x != 0xFF) {
@@ -390,6 +390,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct NvmLogResultIter<F, T> {
     nvm_log: NvmLog<F, T>,
     next_log_addr: u32,
@@ -432,7 +433,7 @@ where
 
                         // +1 for the NULL sentinel
                         self.next_log_addr +=
-                            round_to_multiple_of(msg_buf.len() as u32 + 1, F::READ_SIZE as u32);
+                            round_to_multiple_of(msg_buf.len() as u32 + 1, F::WRITE_SIZE as u32);
 
                         match msg_buf.get(0).copied() {
                             Some(HEADER_ACTIVE) => {
@@ -515,7 +516,7 @@ where
                         } else {
                             // +1 for the NULL sentinel
                             self.next_log_addr +=
-                                round_to_multiple_of(msg_buf.len() as u32 + 1, F::READ_SIZE as _);
+                                round_to_multiple_of(msg_buf.len() as u32 + 1, F::WRITE_SIZE as _);
                         }
 
                         match msg_buf.get(0).copied() {
