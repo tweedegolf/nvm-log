@@ -512,7 +512,7 @@ where
     }
 
     match nvm_log.flash.read(current_index, current_bytes) {
-        Err(_) => todo!(),
+        Err(e) => ControlFlow::Break(Err(NvmLogError::Flash(e))),
         Ok(()) => {
             match current_bytes.get(0).copied() {
                 None => {
