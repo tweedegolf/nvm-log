@@ -127,22 +127,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
 }
 
 impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
-    pub fn erase_up_to_position_help(&mut self, position: &NvmLogPosition) -> (u32, u32) {
-        // find the next message
-        let next_boundary = match self.next_message_start(self.next_log_addr).unwrap() {
-            None => {
-                // loop back around
-                match self.next_message_start(0).unwrap() {
-                    None => todo!("no logs at all"),
-                    Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
-                }
-            }
-            Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
-        };
-
-        (position.next_log_addr, next_boundary)
-    }
-
     pub fn erase_up_to_position(
         &mut self,
         position: &NvmLogPosition,
