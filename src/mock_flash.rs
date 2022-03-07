@@ -196,10 +196,11 @@ mod test {
     // use std::assert_matches::assert_matches;
 
     #[test]
-    fn double_write_gives_error() {
+    fn triple_write_gives_error() {
         let mut flash = MockFlash::new();
 
-        flash.write(0x100, &[0xAB]).unwrap();
+        flash.write(0x100, &[0xAB, 0, 0, 0]).unwrap();
+        flash.write(0x100, &[0xAB, 0, 0, 0]).unwrap();
 
         assert!(matches!(
             flash.write(0x100, &[0xCD]),

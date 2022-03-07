@@ -252,14 +252,14 @@ mod test {
                 1,
                 1,
                 0,
+                0,
+                0,
+                0,
+                0,
                 HEADER_ACTIVE,
                 2,
                 1,
                 0,
-                255,
-                255,
-                255,
-                255,
                 255,
                 255,
                 255,
@@ -277,7 +277,7 @@ mod test {
 
         let mut flags = [T; 24];
 
-        for item in flags.iter_mut().take(8) {
+        for item in flags.iter_mut().take(12) {
             *item = O;
         }
 
@@ -473,16 +473,18 @@ mod test {
     }
 
     #[test]
-    fn read_4() {
+    fn write_4_read_3() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
         for i in 0..4 {
             nvm_log.store(i as u8).unwrap();
         }
 
+        dbg!(&nvm_log.flash.words);
+
         let messages: Vec<_> = nvm_log.iter().collect();
 
-        assert_eq!(vec![0, 1, 2, 3], messages);
+        assert_eq!(vec![1, 2, 3], messages);
     }
 
     #[test]

@@ -1,5 +1,7 @@
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
 
+use core::ops::ControlFlow;
+
 pub mod mock_flash;
 pub mod tiny_mock_flash;
 
@@ -146,7 +148,7 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
         position: &NvmLogPosition,
     ) -> NvmLogResult<(), F::Error> {
         // find the next message
-        let next_boundary = match self.next_message_start(self.next_log_addr)? {
+        let mut next_boundary = match self.next_message_start(self.next_log_addr)? {
             None => {
                 // loop back around
                 match self.next_message_start(0)? {
@@ -157,17 +159,20 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
             Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
         };
 
-        let it = MsgIndexIter {
-            nvm_log: self,
-            stop_at: position.next_log_addr,
-            next_log_addr: next_boundary,
-        };
+        let stop_at = position.next_log_addr;
 
-        for _ in it {
-            // do nothing
+        loop {
+            match erase_step(self, next_boundary) {
+                ControlFlow::Continue(new_next_boundary) => {
+                    if new_next_boundary == stop_at {
+                        return Ok(());
+                    } else {
+                        next_boundary = new_next_boundary;
+                    }
+                }
+                ControlFlow::Break(done) => return done,
+            }
         }
-
-        Ok(())
     }
 }
 
@@ -200,8 +205,6 @@ where
             None => 0,
             Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
         };
-
-        dbg!(addr, next_boundary);
 
         let iter = NvmLogResultIter {
             next_log_addr: next_boundary,
@@ -295,7 +298,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
         match crosses_page_boundary(&self.flash, self.next_log_addr as usize, bytes) {
             FitsInCurrentPage => {
                 // don't need to erase anything
-                println!("write at {}", self.next_log_addr);
                 self.flash.write(self.next_log_addr, bytes)?;
                 self.next_log_addr += bytes.len() as u32;
             }
@@ -306,7 +308,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
 
-                println!("write at {}", start_address);
                 self.flash.write(start_address, bytes)?;
                 self.next_log_addr = start_address as u32 + bytes.len() as u32;
             }
@@ -335,6 +336,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
+        // TODO check first byte of the page to see if page has any messages
         let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
         while let Some(offset) = it.next() {
@@ -437,8 +439,7 @@ where
     type Item = NvmLogResult<T, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // TODO increase 128 to a higher number
-        let mut scratchpad = [0xFF; 128];
+        let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
         let scratchpad_len = scratchpad.len();
 
         let current_index = self.next_log_addr;
@@ -450,9 +451,13 @@ where
             Ok(()) => {
                 match current_bytes.get(0).copied() {
                     None => {
-                        // no bytes could be read; iterator is empty
-                        dbg!("no more bytes!");
-                        None
+                        if current_index != 0 {
+                            self.next_log_addr = 0;
+                            self.next()
+                        } else {
+                            // no bytes could be read; iterator is empty
+                            None
+                        }
                     }
                     Some(0) => {
                         // skip ahead to the next message
@@ -468,7 +473,6 @@ where
                     }
                     Some(0xFF) => {
                         // hit unused memory; we're done here
-                        println!("iterator reached the end of used bytes");
                         None
                     }
                     Some(HEADER_ACTIVE) => {
@@ -500,86 +504,86 @@ where
 
                         self.next()
                     }
-                    _ => unreachable!("a word in this position MUST be one of the above options"),
+                    Some(other) => unreachable!(
+                        r"a word in this position MUST be one of the above options, got {} (hex: {:x?})",
+                        other, other
+                    ),
                 }
             }
         }
     }
 }
 
-#[derive(Debug)]
-pub struct MsgIndexIter<'a, F, T> {
-    nvm_log: &'a mut NvmLog<F, T>,
-    stop_at: u32,
+/// Set the header to inactive,
+/// leave other bytes of the word unchanged (assuming NOR flash)
+const INACTIVES: [u8; 16] = {
+    let mut value = [0xFF; 16];
+    value[0] = HEADER_INACTIVE;
+    value
+};
+
+fn erase_step<F, T>(
+    nvm_log: &mut NvmLog<F, T>,
     next_log_addr: u32,
-}
-
-impl<'a, F, T> Iterator for MsgIndexIter<'a, F, T>
+) -> ControlFlow<NvmLogResult<(), F::Error>, u32>
 where
-    F: embedded_storage::nor_flash::NorFlash,
+    F: embedded_storage::nor_flash::MultiwriteNorFlash,
 {
-    type Item = NvmLogResult<u32, F::Error>;
+    let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
+    let scratchpad_len = scratchpad.len();
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next_log_addr == self.nvm_log.next_log_addr || self.next_log_addr == self.stop_at {
-            return None;
-        }
+    let current_index = next_log_addr;
+    let remaining_bytes = nvm_log.flash.capacity() - current_index as usize;
 
-        let remaining_bytes = self.nvm_log.flash.capacity() - self.next_log_addr as usize;
-        let remaining_bytes = remaining_bytes.min(WORKING_BUF_SIZE);
+    let current_bytes = &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
 
-        let mut buf = [0xFF; WORKING_BUF_SIZE];
-        let buf = &mut buf[..remaining_bytes];
+    macro_rules! next_message_start {
+        () => {{
+            match nvm_log.next_message_start(current_index) {
+                Err(e) => {
+                    // propagate errors
+                    return ControlFlow::Break(Err(e));
+                }
+                Ok(value) => {
+                    // if None, wrap around to the beginning
+                    value.unwrap_or(0)
+                }
+            }
+        }};
+    }
 
-        let current_index = self.next_log_addr;
-        match self.nvm_log.flash.read(self.next_log_addr, buf) {
-            Err(e) => Some(Err(NvmLogError::Flash(e))),
-            Ok(()) => {
-                match buf.iter().position(|x| *x == 0) {
-                    None => {
-                        // there is no message here, we need to go look at the start
-                        println!("looping back around");
-                        self.next_log_addr = 0;
-                        self.next()
-                    }
-                    Some(message_end) => {
-                        let after_msg_end = buf.get(message_end + 1).copied();
-                        let msg_buf = &mut buf[..message_end];
-
-                        if msg_buf.is_empty() {
-                            return None;
-                        }
-
-                        // +1 for the NULL sentinel
-                        self.next_log_addr +=
-                            round_to_multiple_of(msg_buf.len() as u32 + 1, F::WRITE_SIZE as _);
-
-                        const INACTIVES: [u8; 16] = {
-                            let mut value = [0xFF; 16];
-                            value[0] = HEADER_INACTIVE;
-                            value
-                        };
-
-                        match msg_buf.get(0).copied() {
-                            Some(HEADER_ACTIVE) => {
-                                let header_addr = current_index;
-                                match self
-                                    .nvm_log
-                                    .flash
-                                    .write(header_addr, &INACTIVES[..F::WRITE_SIZE])
-                                {
-                                    Err(e) => Some(Err(NvmLogError::Flash(e))),
-                                    Ok(()) => Some(Ok(0)),
-                                }
-                            }
-                            Some(HEADER_INACTIVE) => {
-                                // already inactive, do nothing
-                                Some(Ok(0))
-                            }
-                            other => unreachable!("this should never happen {:?}", other),
-                        }
+    match nvm_log.flash.read(current_index, current_bytes) {
+        Err(_) => todo!(),
+        Ok(()) => {
+            match current_bytes.get(0).copied() {
+                None => {
+                    // no bytes could be read; iterator is empty
+                    ControlFlow::Break(Ok(()))
+                }
+                Some(0) => {
+                    // skip ahead to the next message
+                    ControlFlow::Continue(next_message_start!())
+                }
+                Some(0xFF) => {
+                    // hit unused memory; we're done here
+                    ControlFlow::Break(Ok(()))
+                }
+                Some(HEADER_ACTIVE) => {
+                    // flip the header
+                    let flash = &mut nvm_log.flash;
+                    match flash.write(current_index, &INACTIVES[..F::WRITE_SIZE]) {
+                        Err(e) => ControlFlow::Break(Err(NvmLogError::Flash(e))),
+                        Ok(()) => ControlFlow::Continue(next_message_start!()),
                     }
                 }
+                Some(HEADER_INACTIVE) => {
+                    // skip to next message
+                    ControlFlow::Continue(next_message_start!())
+                }
+                Some(other) => unreachable!(
+                    "a word in this position MUST be one of the above options, got {} (hex: {:x?})",
+                    other, other
+                ),
             }
         }
     }
