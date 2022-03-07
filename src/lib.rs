@@ -22,14 +22,54 @@ pub struct NvmLogPosition {
     next_log_addr: u32,
 }
 
-fn last_uncleared<F>(flash: &mut F, end: u32) -> NvmLogResult<Option<u32>, F::Error>
+fn page_is_partially_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
 where
     F: embedded_storage::nor_flash::NorFlash,
 {
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+
+    let next_page_start = page_start + F::ERASE_SIZE as u32;
+
+    let page_end = &mut [0; 16];
+    let page_end = &mut page_end[..F::WRITE_SIZE];
+    flash.read(next_page_start - F::WRITE_SIZE as u32, page_end)?;
+
+    // a full (sealed) page always ends in NULL. Hence, if this page
+    // ends in a 0xFF then either it is only partially written, or it's completely
+    // blank (meaning it's full of 0xFF's)
+    Ok(page_end.ends_with(&[0xFF]))
+}
+
+fn page_is_completely_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+
+    let page_start_word = &mut [0; 16];
+    let page_start_word = &mut page_start_word[..F::WRITE_SIZE];
+    flash.read(page_start, page_start_word)?;
+
+    // messages cannot cross page boundaries. That means that the first byte of a used page must be
+    // one of the HEADER constants. The only alternative is that the first byte is 0xFF indicating
+    // blank memory
+    Ok(page_start_word.starts_with(&[0xFF]))
+}
+
+fn page_last_uncleared_index<F>(
+    flash: &mut F,
+    page_start: u32,
+) -> NvmLogResult<Option<u32>, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+    let next_page_start = page_start + F::ERASE_SIZE as u32;
+
     let mut bytes = [0; 16];
     let bytes = &mut bytes[..F::WRITE_SIZE];
 
-    for index in (0..end).step_by(F::WRITE_SIZE).rev() {
+    for index in (0..next_page_start).step_by(F::WRITE_SIZE).rev() {
         flash.read(index, bytes)?;
 
         if bytes.iter().any(|x| *x != 0xFF) {
@@ -94,35 +134,26 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
         let num_pages = flash.capacity() / F::ERASE_SIZE;
 
-        let mut position = NvmLogPosition::default();
-
-        for next_page_start in (1..=num_pages).map(|x| x * F::ERASE_SIZE) {
-            let page_end = &mut [0; 16];
-            let page_end = &mut page_end[..F::WRITE_SIZE];
-            flash.read(next_page_start as u32 - F::WRITE_SIZE as u32, page_end)?;
-
-            // a full (sealed) page always ends in NULL. Hence, if this page
-            // ends in a 0xFF then either it is only partially written, or it's completely
-            // blank (meaning it's full of 0xFF's)
-            if page_end.ends_with(&[0xFF]) {
-                match last_uncleared(flash, next_page_start as u32)? {
+        for page_start in (0..num_pages).map(|x| x * F::ERASE_SIZE) {
+            if page_is_completely_blank(flash, page_start as u32)? {
+                // skip this page
+            } else if page_is_partially_blank(flash, page_start as u32)? {
+                match page_last_uncleared_index(flash, page_start as u32)? {
                     None => {
-                        // The whole page is filled with 0xFF's
-                        position.next_log_addr = (next_page_start - F::ERASE_SIZE) as u32;
+                        unreachable!("The page is partially blank, but we found only 0xFF bytes");
                     }
                     Some(last) => {
-                        // Part of the page is filled; start after the last message
-                        position.next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
+                        // we have found the left-most page that has space available for new logs
+                        // that's what we were looking for; break and return
+                        let next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
+                        return Ok(NvmLogPosition { next_log_addr });
                     }
                 }
-
-                // we have found the left-most page that has space available for new logs
-                // that's what we were looking for; break and return
-                break;
             }
         }
 
-        Ok(position)
+        // all pages are blank; start at page 0
+        Ok(NvmLogPosition { next_log_addr: 0 })
     }
 }
 
