@@ -167,7 +167,10 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
             None => {
                 // loop back around
                 match self.next_message_start(0)? {
-                    None => todo!("no logs at all"),
+                    None => {
+                        // there are no logs at all; we're done
+                        return Ok(());
+                    }
                     Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
                 }
             }

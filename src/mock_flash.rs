@@ -581,4 +581,13 @@ mod test {
         dbg!(messages.len(), messages);
         */
     }
+
+    #[test]
+    fn erase_empty() {
+        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+
+        let position = nvm_log.current_position();
+
+        nvm_log.erase_up_to_position(&position).unwrap();
+    }
 }
