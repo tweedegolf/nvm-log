@@ -194,7 +194,7 @@ where
     pub fn result_iter(self) -> NvmLogResultIter<F, T> {
         match self.result_iter_help() {
             Ok(iter) => iter,
-            Err(e) => panic!("implementation error"),
+            Err(_e) => panic!("implementation error"),
         }
     }
 
@@ -233,7 +233,6 @@ where
     assert!(end_address - start_address <= F::ERASE_SIZE);
 
     let ends_at_page_boundary = end_address % F::ERASE_SIZE == 0;
-    let starts_at_page_boundary = start_address % F::ERASE_SIZE == 0;
     let crosses_page_boundary =
         (start_address / F::ERASE_SIZE) != ((end_address - 1) / F::ERASE_SIZE);
 
@@ -337,9 +336,9 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         // TODO check first byte of the page to see if page has any messages
-        let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
+        let it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
-        while let Some(offset) = it.next() {
+        for offset in it {
             let word = &mut [0; 16];
             let word = &mut word[..F::WRITE_SIZE];
             self.flash.read(offset as u32, word)?;
@@ -350,46 +349,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             // padding), and the next word starts a new message (or is empty)
             if word[F::WRITE_SIZE - 1] == 0 {
                 return Ok(Some((offset + F::WRITE_SIZE) as u32));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn contains_message_header(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        let word = &mut [0; 16];
-        let word = &mut word[..F::WRITE_SIZE];
-        self.flash.read(start as u32, word)?;
-
-        if word[0] == HEADER_ACTIVE || word[0] == HEADER_INACTIVE {
-            Ok(Some(start as u32))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn first_uncleared(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        for index in start..self.flash.capacity() as u32 {
-            let mut output = [0];
-            self.flash.read(index, &mut output)?;
-
-            if output[0] != 0xFF {
-                return Ok(Some(index));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn last_uncleared(&mut self, end: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        let mut bytes = [0; 16];
-        let bytes = &mut bytes[..F::WRITE_SIZE];
-
-        for index in (0..end).step_by(F::WRITE_SIZE).rev() {
-            self.flash.read(index, bytes)?;
-
-            if bytes.iter().any(|x| *x != 0xFF) {
-                return Ok(Some(index));
             }
         }
 
@@ -591,8 +550,4 @@ where
 
 fn page_start(address: u32, page_size: u32) -> u32 {
     (address / page_size) * page_size
-}
-
-fn page_end(address: u32, page_size: u32) -> u32 {
-    page_start(address, page_size) + page_size
 }

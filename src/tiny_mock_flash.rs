@@ -1,6 +1,5 @@
 #![cfg(feature = "std")]
 
-use crate::HEADER_ACTIVE;
 use core::ops::Range;
 use embedded_storage::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
@@ -191,7 +190,7 @@ impl NorFlash for MockFlash {
 mod test {
     use super::*;
     use crate::NvmLog;
-    // use std::assert_matches::assert_matches;
+    use crate::HEADER_ACTIVE;
 
     #[test]
     fn double_write_is_fine() {
