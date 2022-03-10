@@ -134,11 +134,13 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
         let num_pages = flash.capacity() / F::ERASE_SIZE;
 
-        for page_start in (0..num_pages).map(|x| x * F::ERASE_SIZE) {
-            if page_is_completely_blank(flash, page_start as u32)? {
+        for page_index in 0..num_pages {
+            let page_start = (page_index * F::ERASE_SIZE) as u32;
+
+            if page_is_completely_blank(flash, page_start)? {
                 // skip this page
-            } else if page_is_partially_blank(flash, page_start as u32)? {
-                match page_last_uncleared_index(flash, page_start as u32)? {
+            } else if page_is_partially_blank(flash, page_start)? {
+                match page_last_uncleared_index(flash, page_start)? {
                     None => {
                         unreachable!("The page is partially blank, but we found only 0xFF bytes");
                     }
