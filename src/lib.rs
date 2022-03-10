@@ -354,19 +354,32 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         // TODO check first byte of the page to see if page has any messages
-        let it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
+        let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
-        for offset in it {
+        while let Some(ref offset) = it.next() {
+            let offset = *offset as u32;
+
+            // check if the page is completely empty; if so, skip it completely
+            let is_page_start = page_start(offset, F::ERASE_SIZE as u32) == offset;
+            if is_page_start && page_is_completely_blank(&mut self.flash, offset)? {
+                // advance to the next page
+                for _ in 0..(F::ERASE_SIZE / F::WRITE_SIZE) {
+                    it.next();
+                }
+
+                continue;
+            }
+
             let word = &mut [0; 16];
             let word = &mut word[..F::WRITE_SIZE];
-            self.flash.read(offset as u32, word)?;
+            self.flash.read(offset, word)?;
 
             // a NULL bytes is the Cobs message sentinal (end) value
             // also we padd words with 0 bytes, so if the final byte
             // of the word is a NULL, the word must contain a NULL sentinel (and possibly some
             // padding), and the next word starts a new message (or is empty)
-            if word[F::WRITE_SIZE - 1] == 0 {
-                return Ok(Some((offset + F::WRITE_SIZE) as u32));
+            if word.ends_with(&[0]) {
+                return Ok(Some(offset + F::WRITE_SIZE as u32));
             }
         }
 
