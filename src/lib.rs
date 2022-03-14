@@ -10,74 +10,12 @@ pub const HEADER_ACTIVE: u8 = 0b1100_0000;
 /// This message has been cleared; it should not be sent/shown again
 pub const HEADER_INACTIVE: u8 = 0b1000_0000;
 
-#[derive(Debug)]
-pub struct NvmLog<F, T> {
-    next_log_addr: u32,
-    flash: F,
-    _marker: core::marker::PhantomData<T>,
-}
+/// Must be bigger than any individual message
+const WORKING_BUF_SIZE: usize = 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NvmLogPosition {
     next_log_addr: u32,
-}
-
-fn page_is_partially_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
-where
-    F: embedded_storage::nor_flash::NorFlash,
-{
-    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
-
-    let next_page_start = page_start + F::ERASE_SIZE as u32;
-
-    let page_end = &mut [0; 16];
-    let page_end = &mut page_end[..F::WRITE_SIZE];
-    flash.read(next_page_start - F::WRITE_SIZE as u32, page_end)?;
-
-    // a full (sealed) page always ends in NULL. Hence, if this page
-    // ends in a 0xFF then either it is only partially written, or it's completely
-    // blank (meaning it's full of 0xFF's)
-    Ok(page_end.ends_with(&[0xFF]))
-}
-
-fn page_is_completely_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
-where
-    F: embedded_storage::nor_flash::NorFlash,
-{
-    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
-
-    let page_start_word = &mut [0; 16];
-    let page_start_word = &mut page_start_word[..F::WRITE_SIZE];
-    flash.read(page_start, page_start_word)?;
-
-    // messages cannot cross page boundaries. That means that the first byte of a used page must be
-    // one of the HEADER constants. The only alternative is that the first byte is 0xFF indicating
-    // blank memory
-    Ok(page_start_word.starts_with(&[0xFF]))
-}
-
-fn page_last_uncleared_index<F>(
-    flash: &mut F,
-    page_start: u32,
-) -> NvmLogResult<Option<u32>, F::Error>
-where
-    F: embedded_storage::nor_flash::NorFlash,
-{
-    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
-    let next_page_start = page_start + F::ERASE_SIZE as u32;
-
-    let mut bytes = [0; 16];
-    let bytes = &mut bytes[..F::WRITE_SIZE];
-
-    for index in (0..next_page_start).step_by(F::WRITE_SIZE).rev() {
-        flash.read(index, bytes)?;
-
-        if bytes.iter().any(|x| *x != 0xFF) {
-            return Ok(Some(index));
-        }
-    }
-
-    Ok(None)
 }
 
 #[derive(Debug)]
@@ -94,13 +32,16 @@ impl<T> From<T> for NvmLogError<T> {
     }
 }
 
+#[derive(Debug)]
+pub struct NvmLog<F, T> {
+    next_log_addr: u32,
+    flash: F,
+    _marker: core::marker::PhantomData<T>,
+}
+
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F) -> Self {
-        Self {
-            next_log_addr: 0,
-            flash,
-            _marker: core::marker::PhantomData,
-        }
+        Self::new_at_position(flash, NvmLogPosition::default())
     }
 
     pub fn new_infer_position(mut flash: F) -> Self {
@@ -131,7 +72,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     /// Restore the state of the NvmLog (specifically, where should the next message go)
     /// from the information stored in flash. Assumes that either there are valid logs there,
     /// or the used pages have been cleared
-    pub fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
+    fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
         let num_pages = flash.capacity() / F::ERASE_SIZE;
 
         for page_index in 0..num_pages {
@@ -140,7 +81,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             if page_is_completely_blank(flash, page_start)? {
                 // skip this page
             } else if page_is_partially_blank(flash, page_start)? {
-                match page_last_uncleared_index(flash, page_start)? {
+                match page_first_clear_index(flash, page_start)? {
                     None => {
                         unreachable!("The page is partially blank, but we found only 0xFF bytes");
                     }
@@ -155,12 +96,12 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
 
         // all pages are blank; start at page 0
-        Ok(NvmLogPosition { next_log_addr: 0 })
+        Ok(NvmLogPosition::default())
     }
 }
 
 impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
-    pub fn erase_up_to_position(
+    pub fn deactivate_up_to_position(
         &mut self,
         position: &NvmLogPosition,
     ) -> NvmLogResult<(), F::Error> {
@@ -182,7 +123,7 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
         let stop_at = position.next_log_addr;
 
         loop {
-            match erase_step(self, next_boundary) {
+            match deactivate_message_step(self, next_boundary) {
                 ControlFlow::Continue(new_next_boundary) => {
                     if new_next_boundary == stop_at {
                         return Ok(());
@@ -196,21 +137,11 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
     }
 }
 
-fn round_to_multiple_of(value: u32, base: u32) -> u32 {
-    (value + (base - 1)) / base * base
-}
-
 impl<F, T> NvmLog<F, T>
 where
     F: embedded_storage::nor_flash::NorFlash,
     T: serde::de::DeserializeOwned,
 {
-    pub fn iter(self) -> NvmLogIter<F, T> {
-        NvmLogIter {
-            result_iter: self.result_iter(),
-        }
-    }
-
     pub fn result_iter(self) -> NvmLogResultIter<F, T> {
         match self.result_iter_help() {
             Ok(iter) => iter,
@@ -234,8 +165,6 @@ where
         Ok(iter)
     }
 }
-
-const WORKING_BUF_SIZE: usize = 1024;
 
 #[derive(Debug)]
 enum CrossPageBoundary {
@@ -292,9 +221,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
             *b = 0;
         }
 
-        let bytes = &mut buf[..used];
-
-        self.store_help(bytes)
+        self.store_help(&mut buf[..used])
     }
 
     fn write_zeros(&mut self, mut start: u32, end: u32) -> NvmLogResult<(), F::Error> {
@@ -321,30 +248,36 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 self.next_log_addr += bytes.len() as u32;
             }
             NextPage { start_address } => {
+                // The message is too big to fit into the current page.
+                // 1. We first seal the current page with zeros
                 self.write_zeros(self.next_log_addr, start_address as _)?;
-                // we will (partially) write into the next page; we must erase it first
+
+                // 2. we will write into the next page; we must erase it first
                 let start_address = start_address as u32;
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
 
+                // 3. write the message at the start of the next page
                 self.flash.write(start_address, bytes)?;
                 self.next_log_addr = start_address as u32 + bytes.len() as u32;
             }
             BackToTheBeginning => {
-                // we pad the current page with zeros
+                // The message does not fit in the current (which is the last) page
                 let current = self.next_log_addr;
                 let next_page_start_address = self.flash.capacity();
 
                 assert!(next_page_start_address % F::ERASE_SIZE == 0);
 
+                // 1. We first seal the current page with zeros
                 self.write_zeros(current, next_page_start_address as u32)?;
 
+                // 2. we will write into the first page; we must erase it first
                 let start_address = 0u32;
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
 
+                // 3. write the message at the start of the first page
                 self.flash.write(0, bytes)?;
-
                 self.next_log_addr = bytes.len() as u32;
             }
         }
@@ -354,8 +287,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 }
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
-    fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        // TODO check first byte of the page to see if page has any messages
+    pub(crate) fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
         let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
         while let Some(ref offset) = it.next() {
@@ -431,17 +363,14 @@ where
     type Item = NvmLogResult<T, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
-        let scratchpad_len = scratchpad.len();
-
         let current_index = self.next_log_addr;
         let remaining_bytes = self.nvm_log.flash.capacity() - current_index as usize;
 
-        let current_bytes = &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
-        match self.nvm_log.flash.read(current_index, current_bytes) {
-            Err(_) => todo!(),
+        let first_byte = &mut [0][..remaining_bytes.min(1)];
+        match self.nvm_log.flash.read(current_index, first_byte) {
+            Err(e) => Some(Err(NvmLogError::Flash(e))),
             Ok(()) => {
-                match current_bytes.get(0).copied() {
+                match first_byte.get(0).copied() {
                     None => {
                         if current_index != 0 {
                             self.next_log_addr = 0;
@@ -468,6 +397,19 @@ where
                         None
                     }
                     Some(HEADER_ACTIVE) => {
+                        let mut scratchpad = [0xFF; 16];
+                        let scratchpad_len = scratchpad.len();
+
+                        let current_index = self.next_log_addr;
+                        let remaining_bytes =
+                            self.nvm_log.flash.capacity() - current_index as usize;
+
+                        let current_bytes = &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
+
+                        if let Err(e) = self.nvm_log.flash.read(current_index, current_bytes) {
+                            return Some(Err(NvmLogError::Flash(e)));
+                        }
+
                         let next_message_start = self
                             .nvm_log
                             .next_message_start(current_index)
@@ -514,20 +456,17 @@ const INACTIVES: [u8; 16] = {
     value
 };
 
-fn erase_step<F, T>(
+fn deactivate_message_step<F, T>(
     nvm_log: &mut NvmLog<F, T>,
     next_log_addr: u32,
 ) -> ControlFlow<NvmLogResult<(), F::Error>, u32>
 where
     F: embedded_storage::nor_flash::MultiwriteNorFlash,
 {
-    let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
-    let scratchpad_len = scratchpad.len();
-
     let current_index = next_log_addr;
     let remaining_bytes = nvm_log.flash.capacity() - current_index as usize;
 
-    let current_bytes = &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
+    let first_byte = &mut [0][..remaining_bytes.min(1)];
 
     macro_rules! next_message_start {
         () => {{
@@ -544,10 +483,10 @@ where
         }};
     }
 
-    match nvm_log.flash.read(current_index, current_bytes) {
+    match nvm_log.flash.read(current_index, first_byte) {
         Err(e) => ControlFlow::Break(Err(NvmLogError::Flash(e))),
         Ok(()) => {
-            match current_bytes.get(0).copied() {
+            match first_byte.get(0).copied() {
                 None => {
                     // no bytes could be read; iterator is empty
                     ControlFlow::Break(Ok(()))
@@ -581,6 +520,66 @@ where
     }
 }
 
+fn round_to_multiple_of(value: u32, base: u32) -> u32 {
+    (value + (base - 1)) / base * base
+}
+
 fn page_start(address: u32, page_size: u32) -> u32 {
     (address / page_size) * page_size
+}
+
+fn page_is_partially_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+
+    let next_page_start = page_start + F::ERASE_SIZE as u32;
+
+    let page_end = &mut [0; 16];
+    let page_end = &mut page_end[..F::WRITE_SIZE];
+    flash.read(next_page_start - F::WRITE_SIZE as u32, page_end)?;
+
+    // a full (sealed) page always ends in NULL. Hence, if this page
+    // ends in a 0xFF then either it is only partially written, or it's completely
+    // blank (meaning it's full of 0xFF's)
+    Ok(page_end.ends_with(&[0xFF]))
+}
+
+fn page_is_completely_blank<F>(flash: &mut F, page_start: u32) -> NvmLogResult<bool, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+
+    let page_start_word = &mut [0; 16];
+    let page_start_word = &mut page_start_word[..F::WRITE_SIZE];
+    flash.read(page_start, page_start_word)?;
+
+    // messages cannot cross page boundaries. That means that the first byte of a used page must be
+    // one of the HEADER constants. The only alternative is that the first byte is 0xFF indicating
+    // blank memory
+    Ok(page_start_word.starts_with(&[0xFF]))
+}
+
+fn page_first_clear_index<F>(flash: &mut F, page_start: u32) -> NvmLogResult<Option<u32>, F::Error>
+where
+    F: embedded_storage::nor_flash::NorFlash,
+{
+    assert_eq!(page_start % F::ERASE_SIZE as u32, 0);
+    let next_page_start = page_start + F::ERASE_SIZE as u32;
+
+    let mut bytes = [0; 16];
+    let bytes = &mut bytes[..F::WRITE_SIZE];
+
+    // start from the end, because 0xFFFFFFFF could be part of a message
+    for index in (0..next_page_start).step_by(F::WRITE_SIZE).rev() {
+        flash.read(index, bytes)?;
+
+        if bytes.iter().any(|x| *x != 0xFF) {
+            return Ok(Some(index));
+        }
+    }
+
+    Ok(None)
 }

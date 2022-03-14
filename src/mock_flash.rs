@@ -91,7 +91,7 @@ impl MockFlash {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MockFlashError {
     OutOfBounds,
     NotAligned,
@@ -190,10 +190,9 @@ impl NorFlash for MockFlash {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{NvmLog, NvmLogPosition};
+    use crate::NvmLog;
     use arrayvec::ArrayString;
     use serde::{Deserialize, Serialize};
-    // use std::assert_matches::assert_matches;
 
     #[test]
     fn triple_write_gives_error() {
@@ -296,36 +295,6 @@ mod test {
     }
 
     #[test]
-    fn decode_our_logs() {
-        const MEMORY: [u8; 40] = [
-            192, 3, 2, 1, 0, 0, 0, 0, 192, 12, 3, 8, 87, 97, 116, 99, 104, 100, 111, 103, 1, 0, 0,
-            0, 192, 2, 6, 7, 156, 95, 149, 64, 127, 1, 1, 1, 0, 0, 0, 0,
-        ];
-
-        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
-
-        let mut flash = MockFlash::new();
-        // flash.words[..9].copy_from_slice(&memory_u32);
-
-        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new(flash);
-
-        let entry = LogEntry {
-            msg: LogMessage::DeviceBoot,
-            timestamp: TickToUnixResult::NotSynchronized,
-        };
-        nvm_log.store(entry.clone()).unwrap();
-        nvm_log.store(entry).unwrap();
-
-        dbg!(&nvm_log.flash.words[..15]);
-
-        let messages: Vec<_> = nvm_log.iter().collect();
-        // let expected: Vec<u8> = vec![1, 2];
-
-        // assert_eq!(expected, messages);
-        dbg!(&messages);
-    }
-
-    #[test]
     fn decode_our_logs_from_memory() {
         use LogMessage::*;
         use TickToUnixResult::*;
@@ -342,9 +311,7 @@ mod test {
 
         let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
 
-        dbg!(&nvm_log.flash.words[..15]);
-
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
         let expected: Vec<LogEntry> = vec![
             LogEntry {
                 msg: DeviceBoot,
@@ -390,49 +357,9 @@ mod test {
             nvm_log.store(msg).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
         assert_eq!(expected, messages);
-    }
-
-    #[test]
-    fn foobar() {
-        use LogMessage::*;
-        use TickToUnixResult::*;
-
-        const MEMORY: [u8; 256] = [
-            192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82,
-            101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 17, 3, 13, 87, 97, 107, 101,
-            117, 112, 70, 114, 111, 109, 79, 102, 102, 1, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15,
-            3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1,
-            0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0,
-            0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121, 115, 82, 101, 115, 101,
-            116, 82, 101, 113, 1, 0, 0, 0, 0, 192, 3, 2, 1, 0, 0, 0, 0, 192, 15, 3, 11, 83, 121,
-            115, 82, 101, 115, 101, 116, 82, 101, 113, 1, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        ];
-
-        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
-
-        let mut flash = MockFlash::new();
-        flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
-
-        // let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
-        let nvm_log: NvmLog<MockFlash, LogEntry> =
-            NvmLog::new_at_position(flash, NvmLogPosition { next_log_addr: 168 });
-
-        dbg!(&nvm_log.flash.words[..15]);
-
-        let messages: Vec<_> = nvm_log.result_iter().collect();
-
-        // let expected: Vec<_> = vec![];
-        // assert_eq!(expected, messages);
-
-        dbg!(&messages);
     }
 
     #[test]
@@ -474,7 +401,7 @@ mod test {
 
         dbg!(slice2);
 
-        nvm_log.erase_up_to_position(&start_position).unwrap();
+        nvm_log.deactivate_up_to_position(&start_position).unwrap();
 
         let slice = &nvm_log.flash.words[..8];
         let slice2 =
@@ -555,31 +482,41 @@ mod test {
             nvm_log.store(msg.clone()).unwrap();
         }
 
-        // dbg!(&nvm_log.flash.as_bytes());
-
-        let messages: Vec<_> = nvm_log.result_iter().collect();
-
-        dbg!(messages.len());
-
-        // dbg!(messages.len());
-
-        /*
         let position = nvm_log.current_position();
 
         // this will wrap around
-        for msg in messages.into_iter().cycle().take(5) {
-            nvm_log.store(msg).unwrap();
+        for msg in messages.iter().cycle().take(5) {
+            nvm_log.store(msg.clone()).unwrap();
         }
 
-        dbg!(&nvm_log.flash.as_bytes()[120..140]);
+        nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        nvm_log.erase_up_to_position(&position).unwrap();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
-        dbg!(&nvm_log.flash.as_bytes());
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let expected: Vec<LogEntry> = vec![
+            LogEntry {
+                msg: DeviceBoot,
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: MovementReported,
+                timestamp: Success(DateTime(1646056005532)),
+            },
+            LogEntry {
+                msg: DeviceBoot,
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+                timestamp: NotSynchronized,
+            },
+        ];
 
-        dbg!(messages.len(), messages);
-        */
+        assert_eq!(messages, expected)
     }
 
     #[test]
@@ -588,6 +525,6 @@ mod test {
 
         let position = nvm_log.current_position();
 
-        nvm_log.erase_up_to_position(&position).unwrap();
+        nvm_log.deactivate_up_to_position(&position).unwrap();
     }
 }

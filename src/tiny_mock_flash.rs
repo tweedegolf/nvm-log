@@ -440,7 +440,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
         assert_eq!(vec![0], messages);
     }
@@ -453,7 +453,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
         assert_eq!(vec![0, 1], messages);
     }
@@ -466,7 +466,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
         assert_eq!(vec![0, 1, 2], messages);
     }
@@ -481,7 +481,7 @@ mod test {
 
         dbg!(&nvm_log.flash.words);
 
-        let messages: Vec<_> = nvm_log.iter().collect();
+        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
 
         assert_eq!(vec![1, 2, 3], messages);
     }
@@ -495,9 +495,9 @@ mod test {
         }
 
         let position = nvm_log.current_position();
-        nvm_log.erase_up_to_position(&position).unwrap();
+        nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.iter().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
         let expected: Vec<u8> = vec![];
 
         assert_eq!(expected, messages);
@@ -512,9 +512,9 @@ mod test {
         }
 
         let position = nvm_log.current_position();
-        nvm_log.erase_up_to_position(&position).unwrap();
+        nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.iter().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
         let expected: Vec<u8> = vec![];
 
         assert_eq!(expected, messages);
@@ -528,9 +528,9 @@ mod test {
         let position = nvm_log.current_position();
         nvm_log.store(1).unwrap();
 
-        nvm_log.erase_up_to_position(&position).unwrap();
+        nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.iter().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
         let expected: Vec<u8> = vec![1];
 
         assert_eq!(expected, messages);
@@ -545,9 +545,9 @@ mod test {
         nvm_log.store(1).unwrap();
         nvm_log.store(2).unwrap();
 
-        nvm_log.erase_up_to_position(&position).unwrap();
+        nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.iter().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
         let expected: Vec<u8> = vec![1, 2];
 
         assert_eq!(expected, messages);
@@ -562,10 +562,10 @@ mod test {
 
         let old = nvm_log.next_log_addr;
 
-        let (mut flash, _) = nvm_log.free();
+        let (flash, _) = nvm_log.free();
 
-        let new_position = NvmLog::<MockFlash, u8>::restore_from_flash(&mut flash).unwrap();
-        let nvm_log = NvmLog::<MockFlash, u8>::new_at_position(flash, new_position);
+        let nvm_log = NvmLog::<MockFlash, u8>::new_infer_position(flash);
+        let new_position = nvm_log.current_position();
 
         let new = new_position.next_log_addr;
 
@@ -594,24 +594,17 @@ mod test {
             recover_n(n);
         }
     }
-    /*
 
     #[test]
-    fn foobar() {
+    fn next_message_start_skips_empty_page() {
         let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
 
-        for i in 0..11 {
-            nvm_log.store(i as u8).unwrap();
-        }
+        let page_1_start = MockFlash::PAGE_BYTES;
+        let message = &[192, 1, 1, 0];
+        nvm_log.flash.words[page_1_start..][..4].copy_from_slice(message);
 
-        dbg!(nvm_log.oldest_log_addr, nvm_log.next_log_addr);
-        let flash = nvm_log.free();
+        let result = nvm_log.next_message_start(0).unwrap();
 
-        let new: NvmLog<MockFlash, u8> = NvmLog::restore_from_flash(flash).unwrap();
-        dbg!(new.oldest_log_addr, new.next_log_addr);
-        dbg!(&new.flash.words);
+        assert_eq!(result, Some((page_1_start + message.len()) as u32));
     }
-
-    // oldest_log_addr can be in erased page
-    */
 }
