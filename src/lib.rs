@@ -45,7 +45,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     }
 
     pub fn new_infer_position(mut flash: F) -> Self {
-        let position = Self::restore_from_flash(&mut flash).unwrap();
+        let position = Self::infer_position_from_flash(&mut flash).unwrap();
 
         Self::new_at_position(flash, position)
     }
@@ -72,7 +72,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     /// Restore the state of the NvmLog (specifically, where should the next message go)
     /// from the information stored in flash. Assumes that either there are valid logs there,
     /// or the used pages have been cleared
-    fn restore_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
+    pub fn infer_position_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
         let num_pages = flash.capacity() / F::ERASE_SIZE;
 
         for page_index in 0..num_pages {
