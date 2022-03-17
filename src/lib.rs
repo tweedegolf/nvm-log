@@ -397,7 +397,7 @@ where
                         None
                     }
                     Some(HEADER_ACTIVE) => {
-                        let mut scratchpad = [0xFF; 16];
+                        let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
                         let scratchpad_len = scratchpad.len();
 
                         let current_index = self.next_log_addr;
