@@ -142,14 +142,7 @@ where
     F: embedded_storage::nor_flash::NorFlash,
     T: serde::de::DeserializeOwned,
 {
-    pub fn result_iter(self) -> NvmLogResultIter<F, T> {
-        match self.result_iter_help() {
-            Ok(iter) => iter,
-            Err(_e) => panic!("implementation error"),
-        }
-    }
-
-    fn result_iter_help(mut self) -> NvmLogResult<NvmLogResultIter<F, T>, F::Error> {
+    pub fn result_iter(mut self) -> NvmLogResult<NvmLogResultIter<F, T>, F::Error> {
         // find the next message
         let addr = self.next_log_addr;
         let next_boundary = match self.next_message_start(addr)? {
@@ -318,22 +311,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
 
         Ok(None)
-    }
-}
-
-pub struct NvmLogIter<F, T> {
-    result_iter: NvmLogResultIter<F, T>,
-}
-
-impl<'a, F, T> Iterator for NvmLogIter<F, T>
-where
-    F: embedded_storage::nor_flash::NorFlash,
-    T: serde::de::DeserializeOwned,
-{
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.result_iter.next()?.ok()
     }
 }
 

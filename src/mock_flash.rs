@@ -311,7 +311,7 @@ mod test {
 
         let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<LogEntry> = vec![
             LogEntry {
                 msg: DeviceBoot,
@@ -357,7 +357,7 @@ mod test {
             nvm_log.store(msg).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         assert_eq!(expected, messages);
     }
@@ -390,7 +390,7 @@ mod test {
         }
 
         let start_position = nvm_log.current_position();
-        let mut it = nvm_log.result_iter();
+        let mut it = nvm_log.result_iter().unwrap();
         let first: Vec<_> = (&mut it).flatten().collect();
 
         let mut nvm_log = it.free();
@@ -409,7 +409,7 @@ mod test {
 
         dbg!(slice2);
 
-        let it = nvm_log.result_iter();
+        let it = nvm_log.result_iter().unwrap();
         let second: Vec<_> = it.flatten().collect();
 
         assert_eq!(first, messages);
@@ -445,7 +445,7 @@ mod test {
 
         let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         let expected = vec![LogEntry {
             msg: DeviceBoot,
@@ -491,7 +491,7 @@ mod test {
 
         nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         let expected: Vec<LogEntry> = vec![
             LogEntry {

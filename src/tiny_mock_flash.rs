@@ -440,7 +440,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         assert_eq!(vec![0], messages);
     }
@@ -453,7 +453,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         assert_eq!(vec![0, 1], messages);
     }
@@ -466,7 +466,7 @@ mod test {
             nvm_log.store(i as u8).unwrap();
         }
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         assert_eq!(vec![0, 1, 2], messages);
     }
@@ -481,7 +481,7 @@ mod test {
 
         dbg!(&nvm_log.flash.words);
 
-        let messages: Vec<_> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
         assert_eq!(vec![1, 2, 3], messages);
     }
@@ -497,7 +497,7 @@ mod test {
         let position = nvm_log.current_position();
         nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<u8> = vec![];
 
         assert_eq!(expected, messages);
@@ -514,7 +514,7 @@ mod test {
         let position = nvm_log.current_position();
         nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<u8> = vec![];
 
         assert_eq!(expected, messages);
@@ -530,7 +530,7 @@ mod test {
 
         nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<u8> = vec![1];
 
         assert_eq!(expected, messages);
@@ -547,7 +547,7 @@ mod test {
 
         nvm_log.deactivate_up_to_position(&position).unwrap();
 
-        let messages: Vec<u8> = nvm_log.result_iter().flatten().collect();
+        let messages: Vec<u8> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<u8> = vec![1, 2];
 
         assert_eq!(expected, messages);
