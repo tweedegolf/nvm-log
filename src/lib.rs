@@ -22,11 +22,14 @@ pub struct NvmLogPosition {
 pub enum NvmLogError<F> {
     Flash(F),
     Postcard(postcard::Error),
+    /// Some of the data in the flash is invalid and we probably can't recover from it.
+    /// The application should consider erasing the nvm_log flash.
+    InvalidFlashState,
 }
 
 type NvmLogResult<T, F> = Result<T, NvmLogError<F>>;
 
-impl<T> From<T> for NvmLogError<T> {
+impl<T: embedded_storage::nor_flash::NorFlashError> From<T> for NvmLogError<T> {
     fn from(v: T) -> Self {
         NvmLogError::Flash(v)
     }
@@ -44,10 +47,10 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         Self::new_at_position(flash, NvmLogPosition::default())
     }
 
-    pub fn new_infer_position(mut flash: F) -> Self {
-        let position = Self::infer_position_from_flash(&mut flash).unwrap();
+    pub fn new_infer_position(mut flash: F) -> NvmLogResult<Self, F::Error> {
+        let position = Self::infer_position_from_flash(&mut flash)?;
 
-        Self::new_at_position(flash, position)
+        Ok(Self::new_at_position(flash, position))
     }
 
     pub fn new_at_position(flash: F, position: NvmLogPosition) -> Self {
@@ -359,11 +362,12 @@ where
                     }
                     Some(0) => {
                         // skip ahead to the next message
-                        let next_message_start = self
-                            .nvm_log
-                            .next_message_start(current_index)
-                            .unwrap() // TODO remove unwrap?
-                            .unwrap_or(0);
+                        let next_message_start =
+                            match self.nvm_log.next_message_start(current_index) {
+                                Ok(Some(start)) => start,
+                                Ok(None) => 0,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                         self.next_log_addr = next_message_start;
 
@@ -387,11 +391,12 @@ where
                             return Some(Err(NvmLogError::Flash(e)));
                         }
 
-                        let next_message_start = self
-                            .nvm_log
-                            .next_message_start(current_index)
-                            .unwrap() // TODO remove unwrap?
-                            .unwrap_or(0);
+                        let next_message_start =
+                            match self.nvm_log.next_message_start(current_index) {
+                                Ok(Some(start)) => start,
+                                Ok(None) => 0,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                         self.next_log_addr = next_message_start;
 
@@ -405,20 +410,18 @@ where
                         }
                     }
                     Some(HEADER_INACTIVE) => {
-                        let next_message_start = self
-                            .nvm_log
-                            .next_message_start(current_index)
-                            .unwrap() // TODO remove unwrap?
-                            .unwrap_or(0);
+                        let next_message_start =
+                            match self.nvm_log.next_message_start(current_index) {
+                                Ok(Some(start)) => start,
+                                Ok(None) => 0,
+                                Err(e) => return Some(Err(e)),
+                            };
 
                         self.next_log_addr = next_message_start;
 
                         self.next()
                     }
-                    Some(other) => unreachable!(
-                        r"a word in this position MUST be one of the above options, got {} (hex: {:x?})",
-                        other, other
-                    ),
+                    Some(_) => Some(Err(NvmLogError::InvalidFlashState)),
                 }
             }
         }
@@ -488,10 +491,7 @@ where
                     // skip to next message
                     ControlFlow::Continue(next_message_start!())
                 }
-                Some(other) => unreachable!(
-                    "a word in this position MUST be one of the above options, got {} (hex: {:x?})",
-                    other, other
-                ),
+                Some(_) => ControlFlow::Break(Err(NvmLogError::InvalidFlashState)),
             }
         }
     }
