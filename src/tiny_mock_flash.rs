@@ -564,7 +564,7 @@ mod test {
 
         let (flash, _) = nvm_log.free();
 
-        let nvm_log = NvmLog::<MockFlash, u8>::new_infer_position(flash);
+        let nvm_log = NvmLog::<MockFlash, u8>::new_infer_position(flash).unwrap();
         let new_position = nvm_log.current_position();
 
         let new = new_position.next_log_addr;

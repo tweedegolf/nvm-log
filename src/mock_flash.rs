@@ -309,7 +309,7 @@ mod test {
         let mut flash = MockFlash::new();
         flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
 
-        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
         let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<LogEntry> = vec![
@@ -336,7 +336,7 @@ mod test {
         use TickToUnixResult::*;
 
         let flash = MockFlash::new();
-        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
         let expected: Vec<LogEntry> = vec![
             LogEntry {
@@ -368,7 +368,7 @@ mod test {
         use TickToUnixResult::*;
 
         let flash = MockFlash::new();
-        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
         let messages: Vec<LogEntry> = vec![
             LogEntry {
@@ -443,7 +443,7 @@ mod test {
         let mut flash = MockFlash::new();
         flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
 
-        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
         let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 
@@ -461,7 +461,7 @@ mod test {
         use TickToUnixResult::*;
 
         let flash = MockFlash::new();
-        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash);
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
         let messages: Vec<LogEntry> = vec![
             LogEntry {
