@@ -17,7 +17,7 @@ pub enum Writable {
 
 use Writable::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
     pub writable: Vec<Writable>,
     pub words: Vec<u32>,

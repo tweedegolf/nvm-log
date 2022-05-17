@@ -77,12 +77,36 @@ fn flash_logistics_210232_00008_09_05_2022() {
         writable: vec![Writable::T; log_bytes.len()],
     };
 
-    let nvm_log: NvmLog<Flash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
+    let mut nvm_log: NvmLog<Flash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
-    let mut it = nvm_log.result_iter().unwrap();
+    let mut it = nvm_log.clone().result_iter().unwrap();
 
     assert!(matches!(
         it.next(),
         Some(Err(crate::NvmLogError::InvalidFlashState))
+    ));
+
+    // flash is in an invalid state, try to recover by erasing all logs
+    nvm_log.erase_all().unwrap();
+
+    let mut it = nvm_log.clone().result_iter().unwrap();
+
+    assert!(matches!(it.next(), None));
+
+    // write something just to be sure
+    let msg = LogEntry {
+        msg: LogMessage::TimeNotSynchronized,
+        timestamp: TickToUnixResult::NotSynchronized,
+    };
+    nvm_log.store(msg).unwrap();
+
+    let mut it = nvm_log.clone().result_iter().unwrap();
+
+    assert!(matches!(
+        it.next(),
+        Some(Ok(LogEntry {
+            msg: LogMessage::TimeNotSynchronized,
+            timestamp: TickToUnixResult::NotSynchronized,
+        }))
     ));
 }

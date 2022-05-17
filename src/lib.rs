@@ -43,6 +43,16 @@ pub struct NvmLog<F, T> {
     _marker: core::marker::PhantomData<T>,
 }
 
+impl<F: Clone, T> Clone for NvmLog<F, T> {
+    fn clone(&self) -> Self {
+        Self {
+            next_log_addr: self.next_log_addr,
+            flash: self.flash.clone(),
+            _marker: self._marker,
+        }
+    }
+}
+
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F) -> Self {
         Self::new_at_position(flash, NvmLogPosition::default())
@@ -71,6 +81,15 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         NvmLogPosition {
             next_log_addr: self.next_log_addr,
         }
+    }
+
+    /// erase all pages, reset position
+    pub fn erase_all(&mut self) -> NvmLogResult<(), F::Error> {
+        self.flash.erase(0, self.flash.capacity() as u32)?;
+
+        self.next_log_addr = 0;
+
+        Ok(())
     }
 
     /// Restore the state of the NvmLog (specifically, where should the next message go)
