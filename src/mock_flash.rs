@@ -6,7 +6,7 @@ use embedded_storage::nor_flash::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Writable {
+pub enum Writable {
     /// Twice
     T,
     /// Once (can only convert 1 bits to 0
@@ -17,9 +17,10 @@ enum Writable {
 
 use Writable::*;
 
+#[derive(Debug)]
 pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
-    writable: Vec<Writable>,
-    words: Vec<u32>,
+    pub writable: Vec<Writable>,
+    pub words: Vec<u32>,
 }
 
 impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
@@ -61,8 +62,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
         let offset = offset as usize;
         if (offset % BYTES_PER_WORD) != 0 {
             Err(MockFlashError::NotAligned)
-        } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES
-        {
+        } else if offset > Self::CAPACITY_BYTES || offset + length > Self::CAPACITY_BYTES {
             Err(MockFlashError::OutOfBounds)
         } else {
             Ok(offset..(offset + length))
