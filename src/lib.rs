@@ -329,6 +329,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             // If the start is already at the last message start, we'll read only 0xFF bytes.
             // In that case we can stop and just immediately return
             if word.iter().all(|b| *b == 0xFF) {
+                log::info!("Next empty message at {}", offset);
                 return Ok(Some(offset));
             }
         }
