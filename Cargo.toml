@@ -6,14 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
-default = [ "std", "logs" ]
+default = [ "std" ]
 std = []
-logs = ["log"]
 
 [dependencies]
 embedded-storage = "0.3.0"
 postcard = "0.7.2"
-log = { version = "0.4", optional = true }
+log = { version = "0.4" }
 
 # By default, `serde` has the `std` feature enabled, which makes it unsuitable for embedded targets
 # disabling default-features fixes this
