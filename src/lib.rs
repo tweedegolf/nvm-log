@@ -76,28 +76,35 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     /// from the information stored in flash. Assumes that either there are valid logs there,
     /// or the used pages have been cleared
     pub fn infer_position_from_flash(flash: &mut F) -> NvmLogResult<NvmLogPosition, F::Error> {
+        log::info!("Inferring position from flash...");
         let num_pages = flash.capacity() / F::ERASE_SIZE;
 
         for page_index in 0..num_pages {
+            log::info!("Page: {page_index}");
             let page_start = (page_index * F::ERASE_SIZE) as u32;
 
             if page_is_completely_blank(flash, page_start)? {
+                log::info!("Page is completely blank");
                 // skip this page
             } else if page_is_partially_blank(flash, page_start)? {
+                log::info!("Page is partially blank");
                 match page_first_clear_index(flash, page_start)? {
                     None => {
                         unreachable!("The page is partially blank, but we found only 0xFF bytes");
                     }
                     Some(last) => {
+
                         // we have found the left-most page that has space available for new logs
                         // that's what we were looking for; break and return
                         let next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
+                        log::info!("First clear index: {last}. Next log addr {next_log_addr}");
                         return Ok(NvmLogPosition { next_log_addr });
                     }
                 }
             }
+            log::info!("Page is full");
         }
-
+        log::info!("All pages are blank");
         // all pages are blank; start at page 0
         Ok(NvmLogPosition::default())
     }
@@ -147,11 +154,13 @@ where
 {
     pub fn result_iter(mut self) -> NvmLogResult<NvmLogResultIter<F, T>, F::Error> {
         // find the next message
+        log::info!("NvmLog::result_iter");
         let addr = self.next_log_addr;
         let next_boundary = match self.next_message_start(addr)? {
             None => 0,
             Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
         };
+        log::info!("Next boundary: {next_boundary}");
 
         let iter = NvmLogResultIter {
             next_log_addr: next_boundary,
@@ -284,14 +293,18 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub(crate) fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
+        log::info!("getting next message from start ({start})...");
         let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
         while let Some(ref offset) = it.next() {
             let offset = *offset as u32;
+            log::info!("Offset: {offset}");
 
             // check if the page is completely empty; if so, skip it completely
             let is_page_start = page_start(offset, F::ERASE_SIZE as u32) == offset;
+            log::info!("Is page start: {is_page_start}");
             if is_page_start && page_is_completely_blank(&mut self.flash, offset)? {
+                log::info!("Page is completely blank. Advance to next page");
                 // advance to the next page
                 for _ in 0..(F::ERASE_SIZE / F::WRITE_SIZE) {
                     it.next();
@@ -309,6 +322,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             // of the word is a NULL, the word must contain a NULL sentinel (and possibly some
             // padding), and the next word starts a new message (or is empty)
             if word.ends_with(&[0]) {
+                log::info!("Next message at {}", offset + F::WRITE_SIZE as u32);
                 return Ok(Some(offset + F::WRITE_SIZE as u32));
             }
 
@@ -318,7 +332,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
                 return Ok(Some(offset));
             }
         }
-
+        log::info!("None");
         Ok(None)
     }
 }
