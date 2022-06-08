@@ -311,6 +311,12 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             if word.ends_with(&[0]) {
                 return Ok(Some(offset + F::WRITE_SIZE as u32));
             }
+
+            // If the start is already at the last message start, we'll read only 0xFF bytes.
+            // In that case we can stop and just immediately return
+            if word.iter().all(|b| *b == 0xFF) {
+                return Ok(Some(offset));
+            }
         }
 
         Ok(None)
