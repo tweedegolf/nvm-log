@@ -316,8 +316,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         log::debug!("getting next message from start ({start})...");
         let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
 
-        while let Some(ref offset) = it.next() {
-            let offset = *offset as u32;
+        while let Some(offset) = it.next() {
+            let offset = offset as u32;
             log::trace!("Offset: {offset}");
 
             // check if the page is completely empty; if so, skip it completely
@@ -344,13 +344,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             if word.ends_with(&[0]) {
                 log::debug!("Next message at {}", offset + F::WRITE_SIZE as u32);
                 return Ok(Some(offset + F::WRITE_SIZE as u32));
-            }
-
-            // If the start is already at the last message start, we'll read only 0xFF bytes.
-            // In that case we can stop and just immediately return
-            if word.iter().all(|b| *b == 0xFF) {
-                log::debug!("Next empty message at {}", offset);
-                return Ok(Some(offset));
             }
         }
         log::debug!("None");
@@ -462,7 +455,7 @@ where
 
                             self.next_log_addr = next_message_start;
 
-                            self.next()
+                            continue 'outer;
                         }
                         Some(_) => Some(Err(NvmLogError::InvalidFlashState)),
                     }
