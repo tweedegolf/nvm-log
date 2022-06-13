@@ -15,6 +15,7 @@ const WORKING_BUF_SIZE: usize = 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NvmLogPosition {
+    /// index of the first byte of the next message
     next_log_addr: u32,
 }
 
@@ -93,7 +94,6 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
                         unreachable!("The page is partially blank, but we found only 0xFF bytes");
                     }
                     Some(last) => {
-
                         // we have found the left-most page that has space available for new logs
                         // that's what we were looking for; break and return
                         let next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
