@@ -59,54 +59,24 @@ pub struct LogEntry {
 }
 
 #[test]
-fn flash_logistics_210232_00008_09_05_2022() {
-    const DUMP: &[u8] = include_bytes!("../flash_logistics_210232-00008_09-05-2022.bin");
+fn cannot_find_log_position() {
+    const DUMP: &[u8] = include_bytes!("dumps/cannot-find-log-position.logs.bin");
 
-    let log_bytes = &DUMP[FLASH_START..][..FLASH_LENGTH];
+    let log_bytes = DUMP;
     assert!(log_bytes.len() % 4 == 0);
 
-    // we have corruption on the second byte; a message starts with a zero byte
-    // dbg!(&log_bytes[..16]);
-
-    let log_bytes = unsafe {
+    let log_words = unsafe {
         std::slice::from_raw_parts(log_bytes.as_ptr() as *const u32, log_bytes.len() / 4)
     };
 
     let flash = Flash {
-        words: log_bytes.to_vec(),
-        writable: vec![Writable::T; log_bytes.len()],
+        words: log_words.to_vec(),
+        writable: vec![Writable::T; log_words.len()],
     };
 
-    let mut nvm_log: NvmLog<Flash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
+    let nvm_log: NvmLog<Flash, LogEntry> = NvmLog::new_infer_position(flash).unwrap();
 
-    let mut it = nvm_log.clone().result_iter().unwrap();
+    // let mut it = nvm_log.clone().result_iter().unwrap();
 
-    assert!(matches!(
-        it.next(),
-        Some(Err(crate::NvmLogError::InvalidFlashState))
-    ));
-
-    // flash is in an invalid state, try to recover by erasing all logs
-    nvm_log.erase_all().unwrap();
-
-    let mut it = nvm_log.clone().result_iter().unwrap();
-
-    assert!(matches!(it.next(), None));
-
-    // write something just to be sure
-    let msg = LogEntry {
-        msg: LogMessage::TimeNotSynchronized,
-        timestamp: TickToUnixResult::NotSynchronized,
-    };
-    nvm_log.store(msg).unwrap();
-
-    let mut it = nvm_log.clone().result_iter().unwrap();
-
-    assert!(matches!(
-        it.next(),
-        Some(Ok(LogEntry {
-            msg: LogMessage::TimeNotSynchronized,
-            timestamp: TickToUnixResult::NotSynchronized,
-        }))
-    ));
+    assert_eq!(nvm_log.current_position().next_log_addr, 8284);
 }
