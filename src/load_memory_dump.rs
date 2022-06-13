@@ -1,6 +1,6 @@
 #![cfg(test)]
 use crate::mock_flash::{MockFlashBase, Writable};
-use crate::{NvmLog, NvmLogPosition};
+use crate::NvmLog;
 
 use arrayvec::ArrayString;
 use serde::{Deserialize, Serialize};
