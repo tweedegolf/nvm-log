@@ -2,6 +2,7 @@
 
 use core::ops::ControlFlow;
 
+mod load_memory_dump;
 pub mod mock_flash;
 pub mod tiny_mock_flash;
 
@@ -43,6 +44,16 @@ pub struct NvmLog<F, T> {
     _marker: core::marker::PhantomData<T>,
 }
 
+impl<F: Clone, T> Clone for NvmLog<F, T> {
+    fn clone(&self) -> Self {
+        Self {
+            next_log_addr: self.next_log_addr,
+            flash: self.flash.clone(),
+            _marker: self._marker,
+        }
+    }
+}
+
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F) -> Self {
         Self::new_at_position(flash, NvmLogPosition::default())
@@ -71,6 +82,15 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         NvmLogPosition {
             next_log_addr: self.next_log_addr,
         }
+    }
+
+    /// erase all pages, reset position
+    pub fn erase_all(&mut self) -> NvmLogResult<(), F::Error> {
+        self.flash.erase(0, self.flash.capacity() as u32)?;
+
+        self.next_log_addr = 0;
+
+        Ok(())
     }
 
     /// Restore the state of the NvmLog (specifically, where should the next message go)
@@ -364,87 +384,92 @@ where
     type Item = NvmLogResult<T, F::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current_index = self.next_log_addr;
-        let remaining_bytes = self.nvm_log.flash.capacity() - current_index as usize;
+        'outer: loop {
+            let current_index = self.next_log_addr;
+            let remaining_bytes = self.nvm_log.flash.capacity() - current_index as usize;
 
-        let first_byte = &mut [0][..remaining_bytes.min(1)];
-        match self.nvm_log.flash.read(current_index, first_byte) {
-            Err(e) => Some(Err(NvmLogError::Flash(e))),
-            Ok(()) => {
-                match first_byte.get(0).copied() {
-                    None => {
-                        if current_index != 0 {
-                            self.next_log_addr = 0;
-                            self.next()
-                        } else {
-                            // no bytes could be read; iterator is empty
+            let first_byte = &mut [0][..remaining_bytes.min(1)];
+            let answer = match self.nvm_log.flash.read(current_index, first_byte) {
+                Err(e) => Some(Err(NvmLogError::Flash(e))),
+                Ok(()) => {
+                    match first_byte.get(0).copied() {
+                        None => {
+                            if current_index != 0 {
+                                self.next_log_addr = 0;
+                                continue 'outer;
+                            } else {
+                                // no bytes could be read; iterator is empty
+                                None
+                            }
+                        }
+                        Some(0) => {
+                            // skip ahead to the next message
+                            let next_message_start =
+                                match self.nvm_log.next_message_start(current_index) {
+                                    Ok(Some(start)) => start,
+                                    Ok(None) => 0,
+                                    Err(e) => return Some(Err(e)),
+                                };
+
+                            self.next_log_addr = next_message_start;
+
+                            continue 'outer;
+                        }
+                        Some(0xFF) => {
+                            // hit unused memory; we're done here
                             None
                         }
-                    }
-                    Some(0) => {
-                        // skip ahead to the next message
-                        let next_message_start =
-                            match self.nvm_log.next_message_start(current_index) {
-                                Ok(Some(start)) => start,
-                                Ok(None) => 0,
-                                Err(e) => return Some(Err(e)),
-                            };
+                        Some(HEADER_ACTIVE) => {
+                            let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
+                            let scratchpad_len = scratchpad.len();
 
-                        self.next_log_addr = next_message_start;
+                            let current_index = self.next_log_addr;
+                            let remaining_bytes =
+                                self.nvm_log.flash.capacity() - current_index as usize;
 
-                        self.next()
-                    }
-                    Some(0xFF) => {
-                        // hit unused memory; we're done here
-                        None
-                    }
-                    Some(HEADER_ACTIVE) => {
-                        let mut scratchpad = [0xFF; WORKING_BUF_SIZE];
-                        let scratchpad_len = scratchpad.len();
+                            let current_bytes =
+                                &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
 
-                        let current_index = self.next_log_addr;
-                        let remaining_bytes =
-                            self.nvm_log.flash.capacity() - current_index as usize;
+                            if let Err(e) = self.nvm_log.flash.read(current_index, current_bytes) {
+                                return Some(Err(NvmLogError::Flash(e)));
+                            }
 
-                        let current_bytes = &mut scratchpad[..remaining_bytes.min(scratchpad_len)];
+                            let next_message_start =
+                                match self.nvm_log.next_message_start(current_index) {
+                                    Ok(Some(start)) => start,
+                                    Ok(None) => 0,
+                                    Err(e) => return Some(Err(e)),
+                                };
 
-                        if let Err(e) = self.nvm_log.flash.read(current_index, current_bytes) {
-                            return Some(Err(NvmLogError::Flash(e)));
+                            self.next_log_addr = next_message_start;
+
+                            let max_message_length = next_message_start - current_index;
+
+                            let message_bytes = &mut current_bytes[1..max_message_length as usize];
+
+                            match postcard::from_bytes_cobs(message_bytes) {
+                                Ok(e) => Some(Ok(e)),
+                                Err(e) => Some(Err(NvmLogError::Postcard(e))),
+                            }
                         }
+                        Some(HEADER_INACTIVE) => {
+                            let next_message_start =
+                                match self.nvm_log.next_message_start(current_index) {
+                                    Ok(Some(start)) => start,
+                                    Ok(None) => 0,
+                                    Err(e) => return Some(Err(e)),
+                                };
 
-                        let next_message_start =
-                            match self.nvm_log.next_message_start(current_index) {
-                                Ok(Some(start)) => start,
-                                Ok(None) => 0,
-                                Err(e) => return Some(Err(e)),
-                            };
+                            self.next_log_addr = next_message_start;
 
-                        self.next_log_addr = next_message_start;
-
-                        let max_message_length = next_message_start - current_index;
-
-                        let message_bytes = &mut current_bytes[1..max_message_length as usize];
-
-                        match postcard::from_bytes_cobs(message_bytes) {
-                            Ok(e) => Some(Ok(e)),
-                            Err(e) => Some(Err(NvmLogError::Postcard(e))),
+                            self.next()
                         }
+                        Some(_) => Some(Err(NvmLogError::InvalidFlashState)),
                     }
-                    Some(HEADER_INACTIVE) => {
-                        let next_message_start =
-                            match self.nvm_log.next_message_start(current_index) {
-                                Ok(Some(start)) => start,
-                                Ok(None) => 0,
-                                Err(e) => return Some(Err(e)),
-                            };
-
-                        self.next_log_addr = next_message_start;
-
-                        self.next()
-                    }
-                    Some(_) => Some(Err(NvmLogError::InvalidFlashState)),
                 }
-            }
+            };
+
+            return answer;
         }
     }
 }
