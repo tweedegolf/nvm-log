@@ -6,7 +6,7 @@ use embedded_storage::nor_flash::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Writable {
+pub enum Writable {
     /// Twice
     T,
     /// Once (can only convert 1 bits to 0
@@ -17,26 +17,27 @@ enum Writable {
 
 use Writable::*;
 
-pub struct MockFlash {
-    writable: Vec<Writable>,
-    words: Vec<u32>,
+#[derive(Debug, Clone)]
+pub struct MockFlashBase<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> {
+    pub writable: Vec<Writable>,
+    pub words: Vec<u32>,
 }
 
-impl Default for MockFlash {
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> Default
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl MockFlash {
-    const PAGES: usize = 3; // 256;
-    const BYTES_PER_WORD: usize = 4;
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize>
+    MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
+    const CAPACITY_WORDS: usize = PAGES * PAGE_WORDS;
+    const CAPACITY_BYTES: usize = Self::CAPACITY_WORDS * BYTES_PER_WORD;
 
-    const CAPACITY_WORDS: usize = Self::PAGES * Self::PAGE_WORDS;
-    const CAPACITY_BYTES: usize = Self::CAPACITY_WORDS * Self::BYTES_PER_WORD;
-
-    const PAGE_WORDS: usize = 32; // 1024;
-    const PAGE_BYTES: usize = Self::PAGE_WORDS * Self::BYTES_PER_WORD;
+    const PAGE_BYTES: usize = PAGE_WORDS * BYTES_PER_WORD;
 
     pub fn new() -> Self {
         Self {
@@ -59,10 +60,9 @@ impl MockFlash {
 
     fn validate_read_operation(offset: u32, length: usize) -> Result<Range<usize>, MockFlashError> {
         let offset = offset as usize;
-        if (offset % Self::BYTES_PER_WORD) != 0 {
+        if (offset % BYTES_PER_WORD) != 0 {
             Err(MockFlashError::NotAligned)
-        } else if offset > MockFlash::CAPACITY_BYTES || offset + length > MockFlash::CAPACITY_BYTES
-        {
+        } else if offset > Self::CAPACITY_BYTES || offset + length > Self::CAPACITY_BYTES {
             Err(MockFlashError::OutOfBounds)
         } else {
             Ok(offset..(offset + length))
@@ -76,8 +76,8 @@ impl MockFlash {
     ) -> Result<Range<usize>, MockFlashError> {
         let range = Self::validate_read_operation(offset, length)?;
 
-        let start_word = range.start / Self::BYTES_PER_WORD;
-        let end_word = (range.end + Self::BYTES_PER_WORD - 1) / Self::BYTES_PER_WORD;
+        let start_word = range.start / BYTES_PER_WORD;
+        let end_word = (range.end + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
 
         let slice = &self.writable[start_word..end_word];
         let it = (range.start..range.end).zip(slice.iter());
@@ -91,28 +91,15 @@ impl MockFlash {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum MockFlashError {
-    OutOfBounds,
-    NotAligned,
-    NotWritable(u32),
-}
-
-impl NorFlashError for MockFlashError {
-    fn kind(&self) -> NorFlashErrorKind {
-        match self {
-            MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
-            MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
-            MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
-        }
-    }
-}
-
-impl ErrorType for MockFlash {
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> ErrorType
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
     type Error = MockFlashError;
 }
 
-impl ReadNorFlash for MockFlash {
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> ReadNorFlash
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
     const READ_SIZE: usize = 1;
 
     fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
@@ -128,10 +115,15 @@ impl ReadNorFlash for MockFlash {
     }
 }
 
-impl MultiwriteNorFlash for MockFlash {}
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> MultiwriteNorFlash
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
+}
 
-impl NorFlash for MockFlash {
-    const WRITE_SIZE: usize = Self::BYTES_PER_WORD;
+impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> NorFlash
+    for MockFlashBase<PAGES, BYTES_PER_WORD, PAGE_WORDS>
+{
+    const WRITE_SIZE: usize = BYTES_PER_WORD;
 
     const ERASE_SIZE: usize = Self::PAGE_BYTES;
 
@@ -153,7 +145,7 @@ impl NorFlash for MockFlash {
             *byte = u8::MAX;
         }
 
-        let range = from / Self::BYTES_PER_WORD..to / Self::BYTES_PER_WORD;
+        let range = from / BYTES_PER_WORD..to / BYTES_PER_WORD;
         for word_writable in self.writable[range].iter_mut() {
             *word_writable = T;
         }
@@ -168,8 +160,8 @@ impl NorFlash for MockFlash {
             panic!("any write must be a multiple of Self::WRITE_SIZE bytes");
         }
 
-        let start_word = range.start / Self::BYTES_PER_WORD;
-        let end_word = (range.end + Self::BYTES_PER_WORD - 1) / Self::BYTES_PER_WORD;
+        let start_word = range.start / BYTES_PER_WORD;
+        let end_word = (range.end + BYTES_PER_WORD - 1) / BYTES_PER_WORD;
 
         for (target, source) in self.as_bytes_mut()[range].iter_mut().zip(bytes.iter()) {
             *target &= *source;
@@ -187,12 +179,31 @@ impl NorFlash for MockFlash {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum MockFlashError {
+    OutOfBounds,
+    NotAligned,
+    NotWritable(u32),
+}
+
+impl NorFlashError for MockFlashError {
+    fn kind(&self) -> NorFlashErrorKind {
+        match self {
+            MockFlashError::OutOfBounds => NorFlashErrorKind::OutOfBounds,
+            MockFlashError::NotAligned => NorFlashErrorKind::NotAligned,
+            MockFlashError::NotWritable(_) => NorFlashErrorKind::Other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::NvmLog;
     use arrayvec::ArrayString;
     use serde::{Deserialize, Serialize};
+
+    type MockFlash = MockFlashBase<3, 4, 32>;
 
     #[test]
     fn triple_write_gives_error() {
