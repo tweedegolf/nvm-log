@@ -117,7 +117,9 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
                         // we have found the left-most page that has space available for new logs
                         // that's what we were looking for; break and return
                         let next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
-                        log::trace!("First clear index: {last}. Next log addr {next_log_addr}");
+                        log::trace!(
+                            "First clear index: {last:#X}. Next log addr {next_log_addr:#X}"
+                        );
                         return Ok(NvmLogPosition { next_log_addr });
                     }
                 }
@@ -180,7 +182,7 @@ where
             None => 0,
             Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
         };
-        log::trace!("Next boundary: {next_boundary}");
+        log::trace!("Next boundary: {next_boundary:#X}");
 
         let iter = NvmLogResultIter {
             next_log_addr: next_boundary,
@@ -313,12 +315,16 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub(crate) fn next_message_start(&mut self, start: u32) -> NvmLogResult<Option<u32>, F::Error> {
-        log::debug!("getting next message from start ({start})...");
-        let mut it = (start as usize..self.flash.capacity()).step_by(F::WRITE_SIZE);
+        log::debug!("getting next message from start ({start:#X})...");
+        let mut it = (0..self.flash.capacity())
+            .cycle()
+            .skip(start as usize)
+            .take(self.flash.capacity())
+            .step_by(F::WRITE_SIZE);
 
         while let Some(offset) = it.next() {
             let offset = offset as u32;
-            log::trace!("Offset: {offset}");
+            log::trace!("Offset: {offset:#X}");
 
             // check if the page is completely empty; if so, skip it completely
             let is_page_start = page_start(offset, F::ERASE_SIZE as u32) == offset;
@@ -326,7 +332,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             if is_page_start && page_is_completely_blank(&mut self.flash, offset)? {
                 log::debug!("Page is completely blank. Advance to next page");
                 // advance to the next page
-                for _ in 0..(F::ERASE_SIZE / F::WRITE_SIZE) {
+                for _ in 0..(F::ERASE_SIZE / F::WRITE_SIZE - 1) {
                     it.next();
                 }
 
@@ -342,8 +348,10 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             // of the word is a NULL, the word must contain a NULL sentinel (and possibly some
             // padding), and the next word starts a new message (or is empty)
             if word.ends_with(&[0]) {
-                log::debug!("Next message at {}", offset + F::WRITE_SIZE as u32);
-                return Ok(Some(offset + F::WRITE_SIZE as u32));
+                let next_offset = (offset + F::WRITE_SIZE as u32) % self.flash.capacity() as u32;
+
+                log::debug!("Next message at {next_offset:#X}");
+                return Ok(Some(next_offset));
             }
         }
         log::debug!("None");

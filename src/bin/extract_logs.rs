@@ -1,4 +1,4 @@
-fn main() -> std::io::Result<()> { 
+fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     println!("{:?}", args);
 
