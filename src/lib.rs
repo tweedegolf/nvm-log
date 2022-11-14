@@ -14,12 +14,14 @@ pub const HEADER_INACTIVE: u8 = 0b1000_0000;
 const WORKING_BUF_SIZE: usize = 1024;
 
 #[derive(Debug, Default, Clone, Copy)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct NvmLogPosition {
     /// index of the first byte of the next message
     next_log_addr: u32,
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NvmLogError<F> {
     Flash(F),
     Postcard(postcard::Error),
