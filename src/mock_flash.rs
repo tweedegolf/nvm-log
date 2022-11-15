@@ -310,17 +310,33 @@ mod test {
         use LogMessage::*;
         use TickToUnixResult::*;
 
+        let mut flash = MockFlash::new();
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32).unwrap();
+
+        nvm_log.store(LogEntry {
+            msg: DeviceBoot,
+            timestamp: NotSynchronized,
+        }).unwrap();
+
+        nvm_log.store(LogEntry {
+            msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+            timestamp: NotSynchronized,
+        }).unwrap();
+
+        nvm_log.store(LogEntry {
+            msg: MovementReported,
+            timestamp: Success(DateTime(1646056005532)),
+        }).unwrap();
+
         const MEMORY: [u8; 40] = [
             192, 3, 2, 1, 0, 0, 0, 0, 192, 12, 3, 8, 87, 97, 116, 99, 104, 100, 111, 103, 1, 0, 0,
-            0, 192, 2, 6, 7, 156, 95, 149, 64, 127, 1, 1, 1, 0, 0, 0, 0,
+            0, 192, 2, 6, 7, 184, 254, 170, 137, 232, 95, 0, 0, 255, 255, 255, 255,
         ];
 
-        let memory_u32: [u32; MEMORY.len() / 4] = unsafe { core::mem::transmute(MEMORY) };
+        let mut buffer = [0; 40];
+        nvm_log.flash.read(0, &mut buffer).unwrap();
 
-        let mut flash = MockFlash::new();
-        flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
-
-        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32).unwrap();
+        assert_eq!(buffer, MEMORY);
 
         let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
         let expected: Vec<LogEntry> = vec![
@@ -404,8 +420,6 @@ mod test {
         let mut it = nvm_log.result_iter().unwrap();
         let first: Vec<_> = (&mut it).flatten().collect();
 
-        let mut nvm_log = it.free();
-
         let slice = &nvm_log.flash.words[..8];
         let slice2 =
             unsafe { core::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4) };
@@ -454,7 +468,7 @@ mod test {
         let mut flash = MockFlash::new();
         flash.words[..MEMORY.len() / 4].copy_from_slice(&memory_u32);
 
-        let nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32).unwrap();
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32).unwrap();
 
         let messages: Vec<_> = nvm_log.result_iter().unwrap().flatten().collect();
 

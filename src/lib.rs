@@ -189,7 +189,7 @@ where
     F: embedded_storage::nor_flash::NorFlash,
     T: serde::de::DeserializeOwned,
 {
-    pub fn result_iter(mut self) -> NvmLogResult<NvmLogResultIter<F, T>, F::Error> {
+    pub fn result_iter(&mut self) -> NvmLogResult<NvmLogResultIter<F, T>, F::Error> {
         // find the next message
         log::debug!("NvmLog::result_iter");
         let addr = self.next_log_addr;
@@ -376,24 +376,20 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
 }
 
 #[derive(Debug)]
-pub struct NvmLogResultIter<F, T> {
-    nvm_log: NvmLog<F, T>,
+pub struct NvmLogResultIter<'a, F, T> {
+    nvm_log: &'a mut NvmLog<F, T>,
     next_log_addr: u32,
 }
 
-impl<'a, F, T> NvmLogResultIter<F, T> {
+impl<'a, F, T> NvmLogResultIter<'a, F, T> {
     pub fn current_position(&self) -> NvmLogPosition {
         NvmLogPosition {
             next_log_addr: self.next_log_addr,
         }
     }
-
-    pub fn free(self) -> NvmLog<F, T> {
-        self.nvm_log
-    }
 }
 
-impl<'a, F, T> Iterator for NvmLogResultIter<F, T>
+impl<'a, F, T> Iterator for NvmLogResultIter<'a, F, T>
 where
     F: embedded_storage::nor_flash::NorFlash,
     T: serde::de::DeserializeOwned,
