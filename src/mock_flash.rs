@@ -179,7 +179,7 @@ impl<const PAGES: usize, const BYTES_PER_WORD: usize, const PAGE_WORDS: usize> N
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MockFlashError {
     OutOfBounds,
     NotAligned,
@@ -310,7 +310,7 @@ mod test {
         use LogMessage::*;
         use TickToUnixResult::*;
 
-        let mut flash = MockFlash::new();
+        let flash = MockFlash::new();
         let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32).unwrap();
 
         nvm_log.store(LogEntry {
@@ -551,5 +551,40 @@ mod test {
         let position = nvm_log.current_position();
 
         nvm_log.deactivate_up_to_position(&position).unwrap();
+    }
+
+    #[test]
+    fn infer_position_in_restricted_region() {
+        use LogMessage::*;
+        use TickToUnixResult::*;
+
+        let mut nvm_log: NvmLog<MockFlash, LogEntry> = NvmLog::new(MockFlash::new(), 128..MockFlash::CAPACITY_BYTES as u32);
+
+        let messages: Vec<LogEntry> = vec![
+            LogEntry {
+                msg: DeviceBoot,
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: ResetCode(ArrayString::from("Watchdog").unwrap()),
+                timestamp: NotSynchronized,
+            },
+            LogEntry {
+                msg: MovementReported,
+                timestamp: Success(DateTime(1646056005532)),
+            },
+        ];
+
+        for msg in messages.iter().cycle().take(6) {
+            nvm_log.store(msg.clone()).unwrap();
+        }
+
+        let (mut flash, position) = nvm_log.free();
+
+        assert!(flash.as_bytes_mut().iter().take(32).all(|b| *b == 0xFF));
+
+        let inferred_position = NvmLog::<MockFlash, LogEntry>::infer_position_from_flash(&mut flash, 128..MockFlash::CAPACITY_BYTES as u32);
+
+        assert_eq!(inferred_position, Ok(position));
     }
 }

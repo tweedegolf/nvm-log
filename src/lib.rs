@@ -13,14 +13,14 @@ pub const HEADER_INACTIVE: u8 = 0b1000_0000;
 /// Must be bigger than any individual message
 const WORKING_BUF_SIZE: usize = 1024;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct NvmLogPosition {
     /// index of the first byte of the next message
     next_log_addr: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NvmLogError<F> {
     Flash(F),
@@ -59,7 +59,7 @@ impl<F: Clone, T> Clone for NvmLog<F, T> {
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F, assigned_region: Range<u32>) -> Self {
-        Self::new_at_position(flash, NvmLogPosition::default(), assigned_region)
+        Self::new_at_position(flash, NvmLogPosition { next_log_addr: assigned_region.start }, assigned_region)
     }
 
     pub fn new_infer_position(
@@ -76,6 +76,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         position: NvmLogPosition,
         assigned_region: Range<u32>,
     ) -> Self {
+        assert!(assigned_region.contains(&position.next_log_addr));
+
         Self {
             next_log_addr: position.next_log_addr,
             flash,
@@ -113,9 +115,10 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         assigned_region: Range<u32>,
     ) -> NvmLogResult<NvmLogPosition, F::Error> {
         log::debug!("Inferring position from flash...");
+        let start_page = (assigned_region.start as usize) / F::ERASE_SIZE;
         let num_pages = assigned_region.len() / F::ERASE_SIZE;
 
-        for page_index in (assigned_region.start as usize)..num_pages {
+        for page_index in start_page..num_pages {
             log::trace!("Page: {page_index}");
             let page_start = (page_index * F::ERASE_SIZE) as u32;
 
@@ -142,8 +145,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             log::trace!("Page is full");
         }
         log::trace!("All pages are blank");
-        // all pages are blank; start at page 0
-        Ok(NvmLogPosition::default())
+        // all pages are blank; start at the front
+        Ok(NvmLogPosition { next_log_addr: assigned_region.start })
     }
 }
 
