@@ -118,7 +118,7 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         let start_page = (assigned_region.start as usize) / F::ERASE_SIZE;
         let num_pages = assigned_region.len() / F::ERASE_SIZE;
 
-        for page_index in start_page..num_pages {
+        for page_index in start_page..start_page + num_pages {
             log::trace!("Page: {page_index}");
             let page_start = (page_index * F::ERASE_SIZE) as u32;
 
