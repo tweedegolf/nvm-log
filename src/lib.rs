@@ -59,7 +59,13 @@ impl<F: Clone, T> Clone for NvmLog<F, T> {
 
 impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
     pub fn new(flash: F, assigned_region: Range<u32>) -> Self {
-        Self::new_at_position(flash, NvmLogPosition { next_log_addr: assigned_region.start }, assigned_region)
+        Self::new_at_position(
+            flash,
+            NvmLogPosition {
+                next_log_addr: assigned_region.start,
+            },
+            assigned_region,
+        )
     }
 
     pub fn new_infer_position(
@@ -146,7 +152,9 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
         }
         log::trace!("All pages are blank");
         // all pages are blank; start at the front
-        Ok(NvmLogPosition { next_log_addr: assigned_region.start })
+        Ok(NvmLogPosition {
+            next_log_addr: assigned_region.start,
+        })
     }
 }
 
@@ -159,7 +167,7 @@ impl<F: embedded_storage::nor_flash::MultiwriteNorFlash, T> NvmLog<F, T> {
         let mut next_boundary = match self.next_message_start(self.next_log_addr)? {
             None => {
                 // loop back around
-                match self.next_message_start(0)? {
+                match self.next_message_start(self.assigned_region.start)? {
                     None => {
                         // there are no logs at all; we're done
                         return Ok(());
@@ -197,7 +205,7 @@ where
         log::debug!("NvmLog::result_iter");
         let addr = self.next_log_addr;
         let next_boundary = match self.next_message_start(addr)? {
-            None => 0,
+            None => self.assigned_region.start,
             Some(uncleared) => page_start(uncleared, F::ERASE_SIZE as u32),
         };
         log::trace!("Next boundary: {next_boundary:#X}");
@@ -218,7 +226,11 @@ enum CrossPageBoundary {
     BackToTheBeginning,
 }
 
-fn crosses_page_boundary<F>(start_address: usize, buf: &[u8], assigned_region: Range<u32>) -> CrossPageBoundary
+fn crosses_page_boundary<F>(
+    start_address: usize,
+    buf: &[u8],
+    assigned_region: Range<u32>,
+) -> CrossPageBoundary
 where
     F: embedded_storage::nor_flash::NorFlash,
 {
@@ -286,7 +298,11 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
 
     fn store_help(&mut self, bytes: &mut [u8]) -> NvmLogResult<(), F::Error> {
         use CrossPageBoundary::*;
-        match crosses_page_boundary::<F>(self.next_log_addr as usize, bytes, self.assigned_region.clone()) {
+        match crosses_page_boundary::<F>(
+            self.next_log_addr as usize,
+            bytes,
+            self.assigned_region.clone(),
+        ) {
             FitsInCurrentPage => {
                 // don't need to erase anything
                 self.flash.write(self.next_log_addr, bytes)?;
@@ -317,13 +333,13 @@ impl<F: embedded_storage::nor_flash::NorFlash, T: serde::Serialize> NvmLog<F, T>
                 self.write_zeros(current, next_page_start_address as u32)?;
 
                 // 2. we will write into the first page; we must erase it first
-                let start_address = 0u32;
+                let start_address = self.assigned_region.start;
                 let end_address = start_address + F::ERASE_SIZE as u32;
                 self.flash.erase(start_address, end_address)?;
 
                 // 3. write the message at the start of the first page
-                self.flash.write(0, bytes)?;
-                self.next_log_addr = bytes.len() as u32;
+                self.flash.write(self.assigned_region.start, bytes)?;
+                self.next_log_addr = self.assigned_region.start + bytes.len() as u32;
             }
         }
 
@@ -402,7 +418,8 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
             let current_index = self.next_log_addr;
-            let remaining_bytes = self.nvm_log.assigned_region.end as usize - current_index as usize;
+            let remaining_bytes =
+                self.nvm_log.assigned_region.end as usize - current_index as usize;
 
             let first_byte = &mut [0][..remaining_bytes.min(1)];
             let answer = match self.nvm_log.flash.read(current_index, first_byte) {
@@ -411,7 +428,7 @@ where
                     match first_byte.get(0).copied() {
                         None => {
                             if current_index != 0 {
-                                self.next_log_addr = 0;
+                                self.next_log_addr = self.nvm_log.assigned_region.start;
                                 continue 'outer;
                             } else {
                                 // no bytes could be read; iterator is empty
@@ -423,7 +440,7 @@ where
                             let next_message_start =
                                 match self.nvm_log.next_message_start(current_index) {
                                     Ok(Some(start)) => start,
-                                    Ok(None) => 0,
+                                    Ok(None) => self.nvm_log.assigned_region.start,
                                     Err(e) => return Some(Err(e)),
                                 };
 
@@ -453,7 +470,7 @@ where
                             let next_message_start =
                                 match self.nvm_log.next_message_start(current_index) {
                                     Ok(Some(start)) => start,
-                                    Ok(None) => 0,
+                                    Ok(None) => self.nvm_log.assigned_region.start,
                                     Err(e) => return Some(Err(e)),
                                 };
 
@@ -472,7 +489,7 @@ where
                             let next_message_start =
                                 match self.nvm_log.next_message_start(current_index) {
                                     Ok(Some(start)) => start,
-                                    Ok(None) => 0,
+                                    Ok(None) => self.nvm_log.assigned_region.start,
                                     Err(e) => return Some(Err(e)),
                                 };
 
@@ -519,7 +536,7 @@ where
                 }
                 Ok(value) => {
                     // if None, wrap around to the beginning
-                    value.unwrap_or(0)
+                    value.unwrap_or(nvm_log.assigned_region.start)
                 }
             }
         }};
@@ -612,7 +629,7 @@ where
     let bytes = &mut bytes[..F::WRITE_SIZE];
 
     // start from the end, because 0xFFFFFFFF could be part of a message
-    for index in (0..next_page_start).step_by(F::WRITE_SIZE).rev() {
+    for index in (page_start..next_page_start).step_by(F::WRITE_SIZE).rev() {
         flash.read(index, bytes)?;
 
         if bytes.iter().any(|x| *x != 0xFF) {
