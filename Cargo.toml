@@ -8,16 +8,18 @@ edition = "2021"
 [features]
 default = [ "std" ]
 std = []
+defmt = ["dep:defmt", "postcard/use-defmt"]
 
 [dependencies]
 embedded-storage = "0.3.0"
-postcard = "0.7.2"
+postcard = "1.0.2"
 log = { version = "0.4" }
 
 # By default, `serde` has the `std` feature enabled, which makes it unsuitable for embedded targets
 # disabling default-features fixes this
 serde = { version = "1.0.*", default-features = false }
+defmt = { version = "0.3.2", optional = true }
 
 [dev-dependencies]
 serde_derive = { version = "1.0.*", default-features = false }
-arrayvec = { version = "0.6", features = ["serde"], default-features = false }
+arrayvec = { version = "0.7.2", features = ["serde"], default-features = false }

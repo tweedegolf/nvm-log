@@ -238,7 +238,8 @@ mod test {
 
     #[test]
     fn write_words_2() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..2 {
             nvm_log.store(i as u8).unwrap();
@@ -434,7 +435,8 @@ mod test {
 
     #[test]
     fn read_1() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..1 {
             nvm_log.store(i as u8).unwrap();
@@ -447,7 +449,8 @@ mod test {
 
     #[test]
     fn read_2() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..2 {
             nvm_log.store(i as u8).unwrap();
@@ -460,7 +463,8 @@ mod test {
 
     #[test]
     fn read_3() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..3 {
             nvm_log.store(i as u8).unwrap();
@@ -473,7 +477,8 @@ mod test {
 
     #[test]
     fn write_4_read_3() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..4 {
             nvm_log.store(i as u8).unwrap();
@@ -488,7 +493,8 @@ mod test {
 
     #[test]
     fn write_1_erase_1() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..1 {
             nvm_log.store(i as u8).unwrap();
@@ -505,7 +511,8 @@ mod test {
 
     #[test]
     fn write_2_erase_2() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..2 {
             nvm_log.store(i as u8).unwrap();
@@ -522,7 +529,8 @@ mod test {
 
     #[test]
     fn write_2_erase_1() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         nvm_log.store(0).unwrap();
         let position = nvm_log.current_position();
@@ -538,7 +546,8 @@ mod test {
 
     #[test]
     fn write_3_erase_1() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         nvm_log.store(0).unwrap();
         let position = nvm_log.current_position();
@@ -554,7 +563,8 @@ mod test {
     }
 
     fn recover_n(n: usize) {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         for i in 0..n {
             nvm_log.store(i as u8).unwrap();
@@ -564,7 +574,9 @@ mod test {
 
         let (flash, _) = nvm_log.free();
 
-        let nvm_log = NvmLog::<MockFlash, u8>::new_infer_position(flash).unwrap();
+        let nvm_log =
+            NvmLog::<MockFlash, u8>::new_infer_position(flash, 0..MockFlash::CAPACITY_BYTES as u32)
+                .unwrap();
         let new_position = nvm_log.current_position();
 
         let new = new_position.next_log_addr;
@@ -597,7 +609,8 @@ mod test {
 
     #[test]
     fn next_message_start_skips_empty_page() {
-        let mut nvm_log: NvmLog<MockFlash, u8> = NvmLog::new(MockFlash::new());
+        let mut nvm_log: NvmLog<MockFlash, u8> =
+            NvmLog::new(MockFlash::new(), 0..MockFlash::CAPACITY_BYTES as u32);
 
         let page_1_start = MockFlash::PAGE_BYTES;
         let message = &[192, 1, 1, 0];
