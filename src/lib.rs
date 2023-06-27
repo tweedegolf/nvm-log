@@ -147,7 +147,9 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
                         let next_log_addr = round_to_multiple_of(last + 1, F::WRITE_SIZE as _);
                         #[cfg(feature = "defmt")]
                         defmt::trace!(
-                            "First clear index: {:#X}. Next log addr {:#X}", last, next_log_addr
+                            "First clear index: {:#X}. Next log addr {:#X}",
+                            last,
+                            next_log_addr
                         );
                         return Ok(NvmLogPosition { next_log_addr });
                     }
@@ -395,8 +397,8 @@ impl<F: embedded_storage::nor_flash::NorFlash, T> NvmLog<F, T> {
             // of the word is a NULL, the word must contain a NULL sentinel (and possibly some
             // padding), and the next word starts a new message (or is empty)
             if word.ends_with(&[0]) {
-                let next_offset =
-                    self.assigned_region.start + (offset + F::WRITE_SIZE as u32) % self.assigned_region.len() as u32;
+                let next_offset = self.assigned_region.start
+                    + (offset + F::WRITE_SIZE as u32) % self.assigned_region.len() as u32;
 
                 #[cfg(feature = "defmt")]
                 defmt::debug!("Next message at {:#X}", next_offset);
